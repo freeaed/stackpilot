@@ -12,6 +12,9 @@
 .swiftpm/
 migrate_working_dir/
 
+# Local build tools (for example Inno Setup used by tool/build_installer.ps1)
+.tools/
+
 # IntelliJ related
 *.iml
 *.ipr

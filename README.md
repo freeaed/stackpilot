@@ -114,3 +114,24 @@ flutter build windows --release
 
 Use `--debug` if you want the debug build at
 `build\windows\x64\runner\Debug\stackpilot.exe`.
+
+## Installer
+
+Build the release app and package it with Inno Setup:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\build_installer.ps1
+# build\installer\StackPilot-<version>-Setup.exe
+```
+
+The script reads the version from `pubspec.yaml`, or accepts
+`-Version 1.2.0`. Pass `-SkipBuild` to repackage an existing release build.
+Inno Setup 6 is required; install it with
+`winget install --id JRSoftware.InnoSetup --exact`. A local copy under
+`.tools\InnoSetup` is also picked up automatically.
+
+The installer is per-user, has no UAC prompt, and installs to
+`%LOCALAPPDATA%\Programs\StackPilot`. It can optionally create a desktop
+shortcut. StackPilot does not bundle Laragon or any server binaries; point it at
+an existing stack on first launch.
+
