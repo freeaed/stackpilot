@@ -83,6 +83,15 @@ void main() {
   void createStack() {
     createFile(r'bin\apache\httpd-2.4.66\bin\httpd.exe');
     createFile(r'bin\mysql\mysql-8.4.3\bin\mysqld.exe');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
+    createFile(r'data\postgresql\PG_VERSION');
+    createFile(r'data\postgresql\postgresql.conf');
+    File(p.join(root, 'data', 'postgresql', 'PG_VERSION')).writeAsStringSync(
+      '16',
+    );
+    File(
+      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
+    ).writeAsStringSync('port = 5432\n');
     createFile(r'bin\php\php-8.3.30\php.exe');
     createFile(r'etc\ssl\laragon.crt');
     createFile(r'etc\ssl\laragon.key');
@@ -104,6 +113,10 @@ DocumentRoot=$root\\www
 [mysql]
 Use=-1
 
+[postgresql]
+Use=-1
+Port=5432
+
 [nginx]
 Use=0
 ''');
@@ -117,6 +130,13 @@ Use=0
     File(p.join(root, 'bin', 'laragon', 'laragon.cmd'))
       ..createSync(recursive: true)
       ..writeAsStringSync('@SET "PATH=$path;%PATH%;"');
+
+    File(p.join(root, 'usr', 'profile', 'default.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('''
+[postgresql]
+Version=postgresql-x64-16
+''');
   }
 
   testWidgets('shows version controls and the stack switcher', (tester) async {
@@ -217,6 +237,53 @@ Use=0
 
     final ini = File(p.join(root, 'usr', 'laragon.ini')).readAsStringSync();
     expect(ini, contains('Port=3307'));
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('saves the PostgreSQL port from the settings dialog', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    createStack();
+    final layout = StackLayout.detect(root)!;
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        serviceManagerFactory: (_) => _FakeServiceManager(layout),
+      ),
+    );
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.widgetWithText(Tab, 'PostgreSQL'));
+    await tester.pumpAndSettle();
+
+    final portField = find.byWidgetPredicate(
+      (widget) =>
+          widget is TextField &&
+          widget.decoration?.labelText == 'PostgreSQL port',
+    );
+    expect(portField, findsOneWidget);
+    await tester.enterText(portField, '5434');
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Save settings'));
+    await tester.pumpAndSettle();
+
+    final ini = File(p.join(root, 'usr', 'laragon.ini')).readAsStringSync();
+    expect(ini, contains('Port=5434'));
+
+    final conf = File(
+      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
+    ).readAsStringSync();
+    expect(RegExp(r'port\s*=\s*5434').hasMatch(conf), isTrue);
 
     await tester.pumpWidget(const SizedBox());
   });

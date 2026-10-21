@@ -74,12 +74,17 @@ class _AddVersionDialogState extends State<_AddVersionDialog> {
       'PHP reuses the active php.ini and enables common extensions if needed.',
     StackComponent.mysql =>
       'MySQL reuses the active my.ini, including its data directory and port.',
+    StackComponent.postgresql =>
+      'PostgreSQL reuses this stack data folder and the port in '
+          'postgresql.conf.',
     _ => 'The version config is prepared for this stack automatically.',
   };
 
   String? get _downloadPage => switch (widget.component) {
     StackComponent.php => 'https://windows.php.net/download/',
     StackComponent.mysql => 'https://dev.mysql.com/downloads/mysql/',
+    StackComponent.postgresql =>
+      'https://www.postgresql.org/download/windows/',
     StackComponent.apache => 'https://www.apachelounge.com/download/',
     StackComponent.nginx => 'https://nginx.org/en/download.html',
     StackComponent.nodejs => 'https://nodejs.org/en/download',

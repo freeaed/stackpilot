@@ -58,6 +58,10 @@ class StackEditor {
     if (component == StackComponent.mysql) {
       _updateMysqlPort(layout.mysqlPort, install: install);
     }
+
+    if (component == StackComponent.postgresql) {
+      _updatePostgresqlPort(layout.postgresqlPort);
+    }
   }
 
   /// Copies an already extracted version folder into `bin/<component>`.
@@ -160,6 +164,11 @@ class StackEditor {
     if (settings.mysqlPort < 1 || settings.mysqlPort > 65535) {
       throw const StackEditException('MySQL port must be between 1 and 65535.');
     }
+    if (settings.postgresqlPort < 1 || settings.postgresqlPort > 65535) {
+      throw const StackEditException(
+        'PostgreSQL port must be between 1 and 65535.',
+      );
+    }
 
     final iniFile = File(_laragonIniPath);
     final source = _readText(iniFile) ?? '';
@@ -180,7 +189,8 @@ class StackEditor {
       )
       ..setValue('apache', 'DocumentRoot', documentRoot)
       ..setValue('apache', 'SSLEnabled', settings.apacheSsl ? '-1' : '0')
-      ..setValue('mysql', 'Port', '${settings.mysqlPort}');
+      ..setValue('mysql', 'Port', '${settings.mysqlPort}')
+      ..setValue('postgresql', 'Port', '${settings.postgresqlPort}');
 
     for (final component in StackLayout.serviceComponents) {
       editor.setValue(
@@ -197,6 +207,9 @@ class StackEditor {
     }
     if (settings.mysqlPort != layout.mysqlPort) {
       _updateMysqlPort(settings.mysqlPort);
+    }
+    if (settings.postgresqlPort != layout.postgresqlPort) {
+      _updatePostgresqlPort(settings.postgresqlPort);
     }
     _applyPhpSettings(settings.php);
   }
@@ -863,6 +876,18 @@ class StackEditor {
       return;
     }
     final file = File(p.join(mysql.directory, 'my.ini'));
+    final source = _readText(file);
+    if (source == null) {
+      return;
+    }
+    final updated = setIniDirective(source, 'port', '$port', all: true);
+    if (updated != source) {
+      _writeWithBackup(file, updated);
+    }
+  }
+
+  void _updatePostgresqlPort(int port) {
+    final file = File(layout.postgresqlConfigPath);
     final source = _readText(file);
     if (source == null) {
       return;

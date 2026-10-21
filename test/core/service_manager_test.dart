@@ -82,6 +82,10 @@ void main() {
     createFile(r'bin\nginx\nginx-1.28.2\nginx.exe');
     createFile(r'bin\mysql\mysql-8.4.3\bin\mysqld.exe');
     createFile(r'bin\mysql\mysql-8.4.3\my.ini');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\pg_ctl.exe');
+    createFile(r'data\postgresql\PG_VERSION', '16');
+    createFile(r'data\postgresql\postgresql.conf', 'port = 5432\n');
     createFile(r'bin\redis\redis-x64-5.0.14.1\redis-server.exe');
     createFile(r'bin\redis\redis-x64-5.0.14.1\redis-cli.exe');
     createFile(r'bin\mailpit\1.22.3\mailpit.exe');
@@ -115,6 +119,9 @@ Version=httpd-2.4.66
 
 [mysql]
 Version=mysql-8.4.3
+
+[postgresql]
+Version=postgresql-x64-16
 
 [nginx]
 Version=nginx-1.28.2
@@ -261,6 +268,71 @@ Version=node-v22
       'redis-server.exe',
       'mailpit.exe',
     ]);
+  });
+
+  test('starts PostgreSQL with this stack data folder', () async {
+    final starts = <_StartCall>[];
+    final manager = createManager(starts: starts);
+
+    await manager.start(StackComponent.postgresql);
+
+    expect(starts, hasLength(1));
+    expect(starts.single.executable, endsWith(r'bin\postgres.exe'));
+    expect(starts.single.arguments, [
+      '-D',
+      p.join(root, 'data', 'postgresql'),
+    ]);
+    expect(manager.isRunning(StackComponent.postgresql), isTrue);
+  });
+
+  test('refuses to start PostgreSQL without an initialized data folder', () async {
+    Directory(p.join(root, 'data', 'postgresql')).deleteSync(recursive: true);
+    layout = StackLayout.detect(root)!;
+    final starts = <_StartCall>[];
+    final manager = createManager(starts: starts);
+
+    await expectLater(
+      manager.start(StackComponent.postgresql),
+      throwsA(
+        isA<ServiceException>().having(
+          (error) => error.message,
+          'message',
+          contains('no initialized data directory'),
+        ),
+      ),
+    );
+    expect(starts, isEmpty);
+    expect(manager.isRunning(StackComponent.postgresql), isFalse);
+  });
+
+  test('stops PostgreSQL with pg_ctl', () async {
+    final runs = <_RunCall>[];
+    final killed = <int>[];
+    final processes = <_FakeProcess>[];
+    final manager = createManager(
+      runs: runs,
+      killed: killed,
+      processes: processes,
+      runProcess: (executable, arguments) async {
+        processes.single.finish();
+        return 0;
+      },
+    );
+
+    await manager.start(StackComponent.postgresql);
+    await manager.stop(StackComponent.postgresql);
+
+    expect(runs, hasLength(1));
+    expect(runs.single.executable, endsWith(r'bin\pg_ctl.exe'));
+    expect(runs.single.arguments, [
+      '-D',
+      p.join(root, 'data', 'postgresql'),
+      '-m',
+      'fast',
+      'stop',
+    ]);
+    expect(killed, isEmpty);
+    expect(manager.isRunning(StackComponent.postgresql), isFalse);
   });
 
   test('adopts started services into the job object', () async {

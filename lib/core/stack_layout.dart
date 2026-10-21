@@ -9,6 +9,7 @@ enum StackComponent {
   apache('apache'),
   nginx('nginx'),
   mysql('mysql'),
+  postgresql('postgresql'),
   php('php'),
   nodejs('nodejs'),
   redis('redis'),
@@ -68,6 +69,7 @@ class StackLayout {
     StackComponent.apache,
     StackComponent.nginx,
     StackComponent.mysql,
+    StackComponent.postgresql,
     StackComponent.redis,
     StackComponent.memcached,
     StackComponent.mailpit,
@@ -83,6 +85,7 @@ class StackLayout {
     StackComponent.apache: ['bin', 'httpd.exe'],
     StackComponent.nginx: ['nginx.exe'],
     StackComponent.mysql: ['bin', 'mysqld.exe'],
+    StackComponent.postgresql: ['bin', 'postgres.exe'],
     StackComponent.php: ['php.exe'],
     StackComponent.nodejs: ['node.exe'],
     StackComponent.redis: ['redis-server.exe'],
@@ -167,6 +170,60 @@ class StackLayout {
 
   int get mysqlPort =>
       int.tryParse(config.value('mysql', 'Port')?.trim() ?? '') ?? 3306;
+
+  /// PostgreSQL binaries keep their cluster in a data folder rather than next
+  /// to the version, so the first existing candidate wins.
+  String get postgresqlDataDirectory {
+    final candidates = [
+      p.join(dataDirectory, 'postgresql'),
+      p.join(dataDirectory, 'pgsql'),
+      p.join(dataDirectory, 'postgres'),
+    ];
+    for (final candidate in candidates) {
+      if (File(p.join(candidate, 'PG_VERSION')).existsSync()) {
+        return candidate;
+      }
+    }
+    for (final candidate in candidates) {
+      if (Directory(candidate).existsSync()) {
+        return candidate;
+      }
+    }
+    return candidates.first;
+  }
+
+  String get postgresqlConfigPath =>
+      p.join(postgresqlDataDirectory, 'postgresql.conf');
+
+  bool get postgresqlInitialized =>
+      File(p.join(postgresqlDataDirectory, 'PG_VERSION')).existsSync();
+
+  int get postgresqlPort {
+    final configured = int.tryParse(
+      config.value('postgresql', 'Port')?.trim() ?? '',
+    );
+    if (configured != null) {
+      return configured;
+    }
+    return _postgresqlConfPort() ?? 5432;
+  }
+
+  int? _postgresqlConfPort() {
+    final file = File(postgresqlConfigPath);
+    if (!file.existsSync()) {
+      return null;
+    }
+    try {
+      final match = RegExp(
+        r'^[ \t]*port[ \t]*=[ \t]*(\d+)',
+        caseSensitive: false,
+        multiLine: true,
+      ).firstMatch(file.readAsStringSync());
+      return int.tryParse(match?.group(1) ?? '');
+    } on FileSystemException {
+      return null;
+    }
+  }
 
   bool get autoVirtualHosts =>
       _isEnabled(config.value('preferences', 'AutoVirtualHosts'));

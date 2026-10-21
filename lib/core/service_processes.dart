@@ -26,7 +26,7 @@ class WindowsProcessInspector implements ProcessInspector {
   const WindowsProcessInspector({this.timeout = const Duration(seconds: 8)});
 
   static const _script = r'''
-$names = @('httpd.exe','nginx.exe','mysqld.exe','redis-server.exe','mailpit.exe','memcached.exe');
+$names = @('httpd.exe','nginx.exe','mysqld.exe','postgres.exe','redis-server.exe','mailpit.exe','memcached.exe');
 Get-CimInstance Win32_Process |
   Where-Object { $names -contains $_.Name } |
   Select-Object ProcessId, Name, ExecutablePath |

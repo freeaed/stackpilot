@@ -29,6 +29,15 @@ void main() {
     createFile(r'bin\apache\httpd-2.4.66\bin\httpd.exe');
     createFile(r'bin\nginx\nginx-1.28.2\nginx.exe');
     createFile(r'bin\mysql\mysql-8.4.3\bin\mysqld.exe');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
+    createFile(r'data\postgresql\PG_VERSION');
+    createFile(r'data\postgresql\postgresql.conf');
+    File(p.join(root, 'data', 'postgresql', 'PG_VERSION')).writeAsStringSync(
+      '16',
+    );
+    File(
+      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
+    ).writeAsStringSync('#port = 5432\n');
     createFile(r'bin\php\php-8.3.30\php.exe');
     createFile(r'bin\php\php-8.5.11\php.exe');
     createFile(r'bin\nodejs\node-v22\node.exe');
@@ -78,6 +87,9 @@ Use=-1
       ..writeAsStringSync('''
 [mailpit]
 Version=1.22.3
+
+[postgresql]
+Version=postgresql-x64-16
 ''');
   }
 
@@ -143,6 +155,48 @@ Version=php-8.5.11
 
   test('returns null when the directory is not a stack root', () {
     expect(StackLayout.detect(p.join(root, 'missing')), isNull);
+  });
+
+  test('detects PostgreSQL and reads the port from postgresql.conf', () {
+    createStack();
+
+    final layout = StackLayout.detect(root)!;
+
+    expect(
+      layout.activeVersion(StackComponent.postgresql)?.version,
+      'postgresql-x64-16',
+    );
+    expect(
+      layout.postgresqlDataDirectory,
+      p.join(root, 'data', 'postgresql'),
+    );
+    expect(layout.postgresqlInitialized, isTrue);
+    expect(layout.postgresqlPort, 5432);
+  });
+
+  test('prefers the PostgreSQL port stored in laragon.ini', () {
+    createStack();
+    final config = File(p.join(root, 'usr', 'laragon.ini'));
+    config.writeAsStringSync(
+      '${config.readAsStringSync()}\n[postgresql]\nUse=-1\nPort=5433\n',
+    );
+
+    final layout = StackLayout.detect(root)!;
+
+    expect(layout.postgresqlPort, 5433);
+  });
+
+  test('reports an uninitialized PostgreSQL data folder', () {
+    createStack();
+    Directory(p.join(root, 'data', 'postgresql')).deleteSync(recursive: true);
+
+    final layout = StackLayout.detect(root)!;
+
+    expect(layout.postgresqlInitialized, isFalse);
+    expect(
+      layout.postgresqlDataDirectory,
+      p.join(root, 'data', 'postgresql'),
+    );
   });
 
   test('leaves active versions unknown without a Laragon launcher', () {

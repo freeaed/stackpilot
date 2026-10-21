@@ -13,6 +13,7 @@ const _serviceLabels = {
   StackComponent.apache: 'Apache',
   StackComponent.nginx: 'Nginx',
   StackComponent.mysql: 'MySQL',
+  StackComponent.postgresql: 'PostgreSQL',
   StackComponent.redis: 'Redis',
   StackComponent.memcached: 'Memcached',
   StackComponent.mailpit: 'Mailpit',
@@ -71,6 +72,9 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
   late final TextEditingController _mysqlPort = TextEditingController(
     text: '${_settings.mysqlPort}',
   );
+  late final TextEditingController _postgresqlPort = TextEditingController(
+    text: '${_settings.postgresqlPort}',
+  );
   late final TextEditingController _memoryLimit = TextEditingController(
     text: _settings.php.memoryLimit,
   );
@@ -105,6 +109,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     _documentRoot.dispose();
     _dataDirectory.dispose();
     _mysqlPort.dispose();
+    _postgresqlPort.dispose();
     _memoryLimit.dispose();
     _uploadMax.dispose();
     _postMax.dispose();
@@ -151,6 +156,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     final documentRoot = _documentRoot.text.trim();
     final dataDirectory = _dataDirectory.text.trim();
     final port = int.tryParse(_mysqlPort.text.trim());
+    final postgresqlPort = int.tryParse(_postgresqlPort.text.trim());
     if (documentRoot.isEmpty) {
       _fail('Document root cannot be empty.');
       return;
@@ -161,6 +167,12 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     }
     if (port == null || port < 1 || port > 65535) {
       _fail('MySQL port must be a number between 1 and 65535.');
+      return;
+    }
+    if (postgresqlPort == null ||
+        postgresqlPort < 1 ||
+        postgresqlPort > 65535) {
+      _fail('PostgreSQL port must be a number between 1 and 65535.');
       return;
     }
 
@@ -186,6 +198,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
       documentRoot: documentRoot,
       dataDirectory: dataDirectory,
       mysqlPort: port,
+      postgresqlPort: postgresqlPort,
       autoVirtualHosts: _autoVirtualHosts,
       apacheSsl: _apacheSsl,
       enabledServices: Set<StackComponent>.of(_enabledServices),
@@ -237,7 +250,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         width: 620,
         height: 470,
         child: DefaultTabController(
-          length: 5,
+          length: 6,
           child: Column(
             children: [
               const TabBar(
@@ -246,6 +259,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                   Tab(text: 'General'),
                   Tab(text: 'Services'),
                   Tab(text: 'MySQL'),
+                  Tab(text: 'PostgreSQL'),
                   Tab(text: 'PHP'),
                 ],
               ),
@@ -257,6 +271,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                     _generalTab(),
                     _servicesTab(),
                     _mysqlTab(),
+                    _postgresqlTab(),
                     _phpTab(),
                   ],
                 ),
@@ -487,6 +502,41 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         const SizedBox(height: 16),
         const _Hint(
           'Restart MySQL after changing the port. Existing clients that '
+          'connect to the old port will need to be updated.',
+        ),
+      ],
+    );
+  }
+
+  Widget _postgresqlTab() {
+    final layout = widget.layout;
+    return ListView(
+      padding: const EdgeInsets.only(top: 4),
+      children: [
+        TextField(
+          controller: _postgresqlPort,
+          enabled: !_saving,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(
+            labelText: 'PostgreSQL port',
+            border: OutlineInputBorder(),
+            helperText: 'Written to laragon.ini and the active postgresql.conf.',
+          ),
+        ),
+        const SizedBox(height: 16),
+        ListTile(
+          contentPadding: EdgeInsets.zero,
+          leading: const Icon(Icons.folder_outlined),
+          title: const Text('Data directory'),
+          subtitle: Text(layout.postgresqlDataDirectory),
+        ),
+        if (!layout.postgresqlInitialized)
+          const _Hint(
+            'This data folder is not initialized yet. Run initdb once or '
+            'start PostgreSQL from Laragon before StackPilot can start it.',
+          ),
+        const _Hint(
+          'Restart PostgreSQL after changing the port. Existing clients that '
           'connect to the old port will need to be updated.',
         ),
       ],

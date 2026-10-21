@@ -7,16 +7,16 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
 
 ## Features
 
-- **Service control** – start and stop Apache, Nginx, MySQL, Redis, Memcached,
-  and Mailpit. Services started by StackPilot are owned and stopped with the
-  app; services started by Laragon can be adopted and stopped too.
+- **Service control** – start and stop Apache, Nginx, MySQL, PostgreSQL, Redis,
+  Memcached, and Mailpit. Services started by StackPilot are owned and stopped
+  with the app; services started by Laragon can be adopted and stopped too.
 - **Version switching** – click the **Version** control on any PHP, MySQL,
-  Apache, Nginx, Node.js, Redis, Memcached, or Mailpit card, then choose an
-  installed version. StackPilot updates `usr/profile/default.ini` (or
-  `usr/laragon.ini` on older stacks), `bin/laragon/laragon.cmd` PATH entries,
-  Apache's `mod_php.conf`, the active `php.ini` extension directory, and the
-  PHP/Apache module DLL names. The menu lists versions already present under
-  `bin/php`, `bin/mysql`, etc.
+  PostgreSQL, Apache, Nginx, Node.js, Redis, Memcached, or Mailpit card, then
+  choose an installed version. StackPilot updates `usr/profile/default.ini`
+  (or `usr/laragon.ini` on older stacks), `bin/laragon/laragon.cmd` PATH
+  entries, Apache's `mod_php.conf`, the active `php.ini` extension directory,
+  the MySQL and PostgreSQL ports, and the PHP/Apache module DLL names. The menu
+  lists versions already present under `bin/php`, `bin/mysql`, etc.
 - **Add versions** – import an extracted version folder, install from a local
   ZIP, or download and install from a URL. Use this when the version you want
   (for example PHP 8.1 or 8.4, or another MySQL release) is not in the menu yet.
@@ -34,8 +34,8 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
   `%APPDATA%\StackPilot\preferences.json`, so the next launch opens the same
   stack.
 - **Stack settings** – change the document root, Laragon data directory,
-  automatic virtual hosts, Apache SSL, enabled services, MySQL port, and
-  common PHP `php.ini` limits in one dialog.
+  automatic virtual hosts, Apache SSL, enabled services, MySQL and PostgreSQL
+  ports, and common PHP `php.ini` limits in one dialog.
 - **Projects and virtual hosts** – list projects under the document root,
   detect missing/outdated vhost configs and hosts entries, and generate missing
   `auto.<project>.test.conf` files.

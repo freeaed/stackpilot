@@ -74,6 +74,7 @@ class ServiceManager {
     StackComponent.apache,
     StackComponent.nginx,
     StackComponent.mysql,
+    StackComponent.postgresql,
     StackComponent.redis,
     StackComponent.mailpit,
     StackComponent.memcached,
@@ -83,6 +84,7 @@ class ServiceManager {
     StackComponent.apache: 'Apache',
     StackComponent.nginx: 'Nginx',
     StackComponent.mysql: 'MySQL',
+    StackComponent.postgresql: 'PostgreSQL',
     StackComponent.php: 'PHP',
     StackComponent.nodejs: 'Node.js',
     StackComponent.redis: 'Redis',
@@ -350,6 +352,19 @@ class ServiceManager {
           arguments: ['--defaults-file=${p.join(directory, 'my.ini')}'],
           workingDirectory: directory,
         );
+      case StackComponent.postgresql:
+        if (!layout.postgresqlInitialized) {
+          throw ServiceException(
+            'PostgreSQL has no initialized data directory at '
+            '${layout.postgresqlDataDirectory}. Run initdb once or start '
+            'PostgreSQL from Laragon first.',
+          );
+        }
+        return ServiceCommand(
+          executable: install.executablePath,
+          arguments: ['-D', layout.postgresqlDataDirectory],
+          workingDirectory: directory,
+        );
       case StackComponent.redis:
         return ServiceCommand(
           executable: install.executablePath,
@@ -399,6 +414,18 @@ class ServiceManager {
             '--user=root',
             '--connect-timeout=5',
             'shutdown',
+          ],
+          workingDirectory: directory,
+        );
+      case StackComponent.postgresql:
+        return ServiceCommand(
+          executable: p.join(directory, 'bin', 'pg_ctl.exe'),
+          arguments: [
+            '-D',
+            layout.postgresqlDataDirectory,
+            '-m',
+            'fast',
+            'stop',
           ],
           workingDirectory: directory,
         );

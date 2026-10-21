@@ -99,6 +99,7 @@ class StackSettings {
     required this.documentRoot,
     required this.dataDirectory,
     required this.mysqlPort,
+    required this.postgresqlPort,
     required this.autoVirtualHosts,
     required this.apacheSsl,
     required this.enabledServices,
@@ -108,6 +109,7 @@ class StackSettings {
   final String documentRoot;
   final String dataDirectory;
   final int mysqlPort;
+  final int postgresqlPort;
   final bool autoVirtualHosts;
   final bool apacheSsl;
   final Set<StackComponent> enabledServices;
@@ -118,6 +120,7 @@ class StackSettings {
       documentRoot: layout.documentRoot,
       dataDirectory: layout.dataDirectory,
       mysqlPort: layout.mysqlPort,
+      postgresqlPort: layout.postgresqlPort,
       autoVirtualHosts: layout.autoVirtualHosts,
       apacheSsl: _isEnabled(layout.config.value('apache', 'SSLEnabled')),
       enabledServices: {
@@ -132,6 +135,7 @@ class StackSettings {
     String? documentRoot,
     String? dataDirectory,
     int? mysqlPort,
+    int? postgresqlPort,
     bool? autoVirtualHosts,
     bool? apacheSsl,
     Set<StackComponent>? enabledServices,
@@ -141,6 +145,7 @@ class StackSettings {
       documentRoot: documentRoot ?? this.documentRoot,
       dataDirectory: dataDirectory ?? this.dataDirectory,
       mysqlPort: mysqlPort ?? this.mysqlPort,
+      postgresqlPort: postgresqlPort ?? this.postgresqlPort,
       autoVirtualHosts: autoVirtualHosts ?? this.autoVirtualHosts,
       apacheSsl: apacheSsl ?? this.apacheSsl,
       enabledServices: enabledServices ?? this.enabledServices,

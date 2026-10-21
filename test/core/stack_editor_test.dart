@@ -46,6 +46,11 @@ void main() {
 
     createFile(r'bin\mysql\mysql-8.4.3-winx64\bin\mysqld.exe');
     createFile(r'bin\mysql\mysql-9.1.0-winx64\bin\mysqld.exe');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
+    createFile(r'bin\postgresql\postgresql-x64-16\bin\pg_ctl.exe');
+    createFile(r'bin\postgresql\postgresql-x64-17\bin\postgres.exe');
+    createFile(r'data\postgresql\PG_VERSION', '16');
+    createFile(r'data\postgresql\postgresql.conf', '#port = 5432\n');
     createFile(
       r'bin\mysql\mysql-8.4.3-winx64\my.ini',
       '[client]\nport=3306\n\n'
@@ -98,6 +103,10 @@ void main() {
           'Use=-1\n'
           'Port=3306\n'
           '\n'
+          '[postgresql]\n'
+          'Use=-1\n'
+          'Port=5432\n'
+          '\n'
           '[nginx]\n'
           'Use=0\n'
           '\n'
@@ -112,7 +121,8 @@ void main() {
       r'usr\profile\default.ini',
       '[php]\nVersion=php-8.3.30-Win32-vs16-x64\n'
           '\n[apache]\nVersion=httpd-2.4.66\n'
-          '\n[mysql]\nVersion=mysql-8.4.3-winx64\n',
+          '\n[mysql]\nVersion=mysql-8.4.3-winx64\n'
+          '\n[postgresql]\nVersion=postgresql-x64-16\n',
     );
 
     final path = [
@@ -250,6 +260,48 @@ void main() {
 
     final myIni = File(p.join(install.directory, 'my.ini')).readAsStringSync();
     expect(RegExp(r'port\s*=\s*3307').allMatches(myIni), hasLength(2));
+  });
+
+  test('switching PostgreSQL updates the profile and its port', () {
+    final iniFile = File(p.join(root, 'usr', 'laragon.ini'));
+    iniFile.writeAsStringSync(
+      iniFile.readAsStringSync().replaceFirst('Port=5432', 'Port=5433'),
+    );
+    layout = StackLayout.detect(root)!;
+    final install = layout
+        .installedVersions(StackComponent.postgresql)
+        .firstWhere((install) => install.version.contains('17'));
+
+    StackEditor(layout).selectVersion(StackComponent.postgresql, install);
+
+    final profile = IniDocument.parse(
+      File(p.join(root, 'usr', 'profile', 'default.ini')).readAsStringSync(),
+    );
+    expect(
+      profile.value('postgresql', 'Version'),
+      'postgresql-x64-17',
+    );
+
+    final conf = File(
+      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
+    ).readAsStringSync();
+    expect(conf, contains('port=5433'));
+  });
+
+  test('applySettings writes the PostgreSQL port to the ini and conf', () {
+    final settings = StackSettings.load(layout).copyWith(postgresqlPort: 5434);
+
+    StackEditor(layout).applySettings(settings);
+
+    final ini = IniDocument.parse(
+      File(p.join(root, 'usr', 'laragon.ini')).readAsStringSync(),
+    );
+    expect(ini.value('postgresql', 'Port'), '5434');
+
+    final conf = File(
+      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
+    ).readAsStringSync();
+    expect(conf, contains('port=5434'));
   });
 
   test('applySettings writes ini, Apache, MySQL, and PHP settings', () async {
