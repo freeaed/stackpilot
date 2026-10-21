@@ -288,6 +288,37 @@ Version=postgresql-x64-16
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('offers phpMyAdmin from the database action', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    createStack();
+    final layout = StackLayout.detect(root)!;
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        serviceManagerFactory: (_) => _FakeServiceManager(layout),
+      ),
+    );
+
+    await tester.tap(find.text('Database'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Database tools'), findsOneWidget);
+    expect(find.text('Download and install'), findsOneWidget);
+    expect(find.text('Install from ZIP…'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Database tools'), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('shows detected services and projects', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1.0;

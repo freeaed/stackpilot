@@ -9,6 +9,7 @@ import '../core/service_manager.dart';
 import '../core/site_inventory.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
+import 'database_dialog.dart';
 import 'settings_dialog.dart';
 import 'version_dialog.dart';
 import 'windows_dialogs.dart';
@@ -483,6 +484,26 @@ class _DashboardPageState extends State<DashboardPage> {
     await _run('rundll32.exe', ['url.dll,FileProtocolHandler', url]);
   }
 
+  Future<void> _openDatabase() async {
+    final layout = _layout;
+    if (layout == null) {
+      return;
+    }
+    final url = await showDatabaseDialog(
+      context,
+      layout: layout,
+      editor: StackEditor(layout),
+      openUrl: _openUrl,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _inventory = SiteInventory.load(layout));
+    if (url != null) {
+      await _openUrl(url);
+    }
+  }
+
   Future<void> _openTerminal() async {
     final layout = _layout;
     if (layout == null) {
@@ -508,8 +529,7 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  void _showMessage(String message) {
-    if (!mounted) {
+  void _showMessage(String message) {    if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context)
@@ -545,6 +565,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   onOpenWeb: () => _openUrl('http://localhost'),
                   onOpenTerminal: _openTerminal,
                   onOpenRoot: () => _openPath(layout.documentRoot),
+                  onOpenDatabase: _openDatabase,
                   onSettings: _openSettings,
                   onChangeStack: _changeStack,
                 ),
@@ -595,6 +616,7 @@ class _Header extends StatelessWidget {
     required this.onOpenWeb,
     required this.onOpenTerminal,
     required this.onOpenRoot,
+    required this.onOpenDatabase,
     required this.onSettings,
     required this.onChangeStack,
   });
@@ -605,6 +627,7 @@ class _Header extends StatelessWidget {
   final VoidCallback onOpenWeb;
   final VoidCallback onOpenTerminal;
   final VoidCallback onOpenRoot;
+  final VoidCallback onOpenDatabase;
   final VoidCallback onSettings;
   final VoidCallback onChangeStack;
 
@@ -740,8 +763,8 @@ class _Header extends StatelessWidget {
               _HeaderAction(
                 icon: Icons.storage,
                 label: 'Database',
-                onPressed: null,
-                tooltip: 'Database tools arrive in Phase 4',
+                onPressed: onOpenDatabase,
+                tooltip: 'Open phpMyAdmin, or install it in the web root',
               ),
               _HeaderAction(
                 icon: Icons.terminal,

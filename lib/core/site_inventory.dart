@@ -190,6 +190,9 @@ class _Project {
   final String path;
 }
 
+/// Folders in the web root that are tools rather than projects.
+const _toolDirectories = {'phpmyadmin', 'pma'};
+
 List<_Project> _projects(String documentRoot) {
   final directory = Directory(documentRoot);
   if (!directory.existsSync()) {
@@ -203,6 +206,9 @@ List<_Project> _projects(String documentRoot) {
     }
     final name = p.basename(entry.path);
     if (name.startsWith('.') || name.startsWith(r'$')) {
+      continue;
+    }
+    if (_toolDirectories.contains(name.toLowerCase())) {
       continue;
     }
     projects.add(_Project(name, entry.path));

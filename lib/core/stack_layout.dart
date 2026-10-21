@@ -198,8 +198,7 @@ class StackLayout {
   bool get postgresqlInitialized =>
       File(p.join(postgresqlDataDirectory, 'PG_VERSION')).existsSync();
 
-  int get postgresqlPort {
-    final configured = int.tryParse(
+  int get postgresqlPort {    final configured = int.tryParse(
       config.value('postgresql', 'Port')?.trim() ?? '',
     );
     if (configured != null) {
@@ -227,6 +226,25 @@ class StackLayout {
 
   bool get autoVirtualHosts =>
       _isEnabled(config.value('preferences', 'AutoVirtualHosts'));
+
+  /// Folder that serves phpMyAdmin, when one is installed in the web root.
+  String? get phpMyAdminDirectory {
+    for (final name in const ['phpmyadmin', 'phpMyAdmin', 'pma']) {
+      final candidate = p.join(documentRoot, name);
+      if (File(p.join(candidate, 'index.php')).existsSync()) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  String? get phpMyAdminUrl {
+    final directory = phpMyAdminDirectory;
+    if (directory == null) {
+      return null;
+    }
+    return 'http://localhost/${Uri.encodeComponent(p.basename(directory))}/';
+  }
 
   /// Absolute path to the executable that identifies [component] inside
   /// [directory].

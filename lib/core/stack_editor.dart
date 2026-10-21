@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 
 import 'package:path/path.dart' as p;
 
@@ -62,6 +63,121 @@ class StackEditor {
     if (component == StackComponent.postgresql) {
       _updatePostgresqlPort(layout.postgresqlPort);
     }
+  }
+
+  /// Installs phpMyAdmin from a ZIP into `<document root>/phpmyadmin`.
+  ///
+  /// The archive is unpacked in a temporary folder so a failed download never
+  /// leaves a half-installed copy in the web root.
+  Future<String> installPhpMyAdminArchive(String archivePath) async {
+    final archive = File(archivePath);
+    if (!archive.existsSync()) {
+      throw StackEditException('Archive not found: $archivePath');
+    }
+
+    final target = p.join(layout.documentRoot, 'phpmyadmin');
+    if (Directory(target).existsSync()) {
+      throw StackEditException('phpMyAdmin is already installed at $target.');
+    }
+
+    final staging = Directory.systemTemp.createTempSync('stackpilot_pma_');
+    try {
+      await _extractArchive(archive, staging);
+      final source = _locatePhpMyAdmin(staging);
+      if (source == null) {
+        throw const StackEditException(
+          'That archive does not contain a phpMyAdmin folder. Download the '
+          '"all languages" ZIP from phpmyadmin.net.',
+        );
+      }
+      await _copyDirectory(source, Directory(target));
+      _writePhpMyAdminConfig(target);
+      return target;
+    } finally {
+      _deleteQuietly(staging);
+    }
+  }
+
+  /// Downloads a phpMyAdmin ZIP and installs it into the web root.
+  Future<String> downloadPhpMyAdmin(String url) async {
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null || !uri.hasScheme) {
+      throw const StackEditException('Enter a valid download URL.');
+    }
+    if (uri.scheme != 'http' && uri.scheme != 'https') {
+      throw const StackEditException('Only HTTP and HTTPS downloads work.');
+    }
+
+    final name = p.basename(uri.path);
+    final download = File(
+      p.join(
+        Directory.systemTemp.path,
+        'stackpilot-${DateTime.now().microsecondsSinceEpoch}-'
+            '${name.isEmpty ? 'phpmyadmin.zip' : name}',
+      ),
+    );
+    try {
+      await _download(uri, download);
+      return await installPhpMyAdminArchive(download.path);
+    } finally {
+      try {
+        if (download.existsSync()) {
+          download.deleteSync();
+        }
+      } on FileSystemException {
+        // The temporary file is cleaned up by the OS if it is still locked.
+      }
+    }
+  }
+
+  static Directory? _locatePhpMyAdmin(Directory root) {
+    final queue = <({Directory directory, int depth})>[
+      (directory: root, depth: 0),
+    ];
+    while (queue.isNotEmpty) {
+      final current = queue.removeAt(0);
+      final looksLikePhpMyAdmin =
+          File(p.join(current.directory.path, 'index.php')).existsSync() &&
+          File(p.join(current.directory.path, 'sql.php')).existsSync();
+      if (looksLikePhpMyAdmin) {
+        return current.directory;
+      }
+      if (current.depth >= 3) {
+        continue;
+      }
+      for (final entry in current.directory.listSync(followLinks: false)) {
+        if (entry is Directory) {
+          queue.add((directory: entry, depth: current.depth + 1));
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Writes a Laragon-style config with an empty root password when the
+  /// archive does not ship one.
+  void _writePhpMyAdminConfig(String directory) {
+    final file = File(p.join(directory, 'config.inc.php'));
+    if (file.existsSync()) {
+      return;
+    }
+
+    final random = Random.secure();
+    final secret = List.generate(
+      32,
+      (_) => random.nextInt(16).toRadixString(16),
+    ).join();
+    file.writeAsStringSync('''<?php
+\$cfg['blowfish_secret'] = '$secret';
+\$i = 0;
+\$i++;
+\$cfg['Servers'][\$i]['auth_type'] = 'config';
+\$cfg['Servers'][\$i]['host'] = '127.0.0.1';
+\$cfg['Servers'][\$i]['port'] = '${layout.mysqlPort}';
+\$cfg['Servers'][\$i]['user'] = 'root';
+\$cfg['Servers'][\$i]['password'] = '';
+\$cfg['Servers'][\$i]['AllowNoPassword'] = true;
+''');
   }
 
   /// Copies an already extracted version folder into `bin/<component>`.

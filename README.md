@@ -39,6 +39,11 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
 - **Projects and virtual hosts** – list projects under the document root,
   detect missing/outdated vhost configs and hosts entries, and generate missing
   `auto.<project>.test.conf` files.
+- **phpMyAdmin** – the **Database** action opens phpMyAdmin when it is already
+  in the document root. Otherwise it installs the official "all languages" ZIP
+  into `www/phpmyadmin` and writes a config that matches the stack MySQL port
+  and Laragon's passwordless root user. Tool folders such as `phpmyadmin` are
+  not listed as projects.
 - **Local only** – no telemetry, no donation prompts.
 
 ## Configuration safety
