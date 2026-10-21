@@ -6,8 +6,9 @@ import 'package:flutter/material.dart';
 import 'app.dart';
 import 'core/app_preferences.dart';
 import 'core/stack_resolution.dart';
+import 'core/window_shell.dart';
 
-void main(List<String> args) {
+Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final preferencesStore = AppPreferencesStore();
@@ -22,6 +23,13 @@ void main(List<String> args) {
     unawaited(
       preferencesStore.save(preferences.copyWith(activeStack: layout.root)),
     );
+  }
+
+  final windowShell = WindowShell(minimizeToTray: preferences.minimizeToTray);
+  try {
+    await windowShell.start();
+  } on Object catch (error) {
+    debugPrint('StackPilot: window and tray integration unavailable: $error');
   }
 
   runApp(

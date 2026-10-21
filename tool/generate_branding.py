@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw, ImageFilter
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets" / "branding"
 WINDOWS_ICON = ROOT / "windows" / "runner" / "resources" / "app_icon.ico"
+TRAY_ICON_SIZE = 64
 
 SIZE = 1024
 SS = 2  # draw at 2x for smoother edges, then downsample
@@ -235,13 +236,18 @@ def main() -> None:
 
     icon = draw_mark(1024, background=True)
     mark = draw_mark(1024, background=False, detail=False)
+    # The tray icon is shown at 16-24 px, so skip the small details that only
+    # add noise at that size.
+    tray_icon = draw_mark(TRAY_ICON_SIZE, background=True, detail=False)
 
     icon.save(ASSETS / "stackpilot_icon.png")
     mark.save(ASSETS / "stackpilot_mark.png")
+    tray_icon.save(ASSETS / "tray_icon.png")
     write_ico(WINDOWS_ICON, (16, 24, 32, 48, 64, 128, 256))
 
     print(f"Wrote {ASSETS / 'stackpilot_icon.png'}")
     print(f"Wrote {ASSETS / 'stackpilot_mark.png'}")
+    print(f"Wrote {ASSETS / 'tray_icon.png'}")
     print(f"Wrote {WINDOWS_ICON}")
 
 

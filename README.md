@@ -44,6 +44,10 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
   into `www/phpmyadmin` and writes a config that matches the stack MySQL port
   and Laragon's passwordless root user. Tool folders such as `phpmyadmin` are
   not listed as projects.
+- **Tray and window behaviour** – minimizing or closing StackPilot hides it to
+  the notification area so started services keep running. Click the tray icon
+  (or choose **Show StackPilot**) to bring the window back, and choose
+  **Exit StackPilot** to quit. Exiting stops the services StackPilot owns.
 - **Local only** – no telemetry, no donation prompts.
 
 ## Configuration safety

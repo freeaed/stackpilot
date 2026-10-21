@@ -8,7 +8,11 @@ import 'package:path/path.dart' as p;
 /// They are stored outside the stack so they survive switching to a different
 /// stack folder.
 class AppPreferences {
-  const AppPreferences({this.stacksFolder, this.activeStack});
+  const AppPreferences({
+    this.stacksFolder,
+    this.activeStack,
+    this.minimizeToTray = true,
+  });
 
   static const empty = AppPreferences();
 
@@ -18,22 +22,34 @@ class AppPreferences {
   /// Stack root that was used last.
   final String? activeStack;
 
-  AppPreferences copyWith({String? stacksFolder, String? activeStack}) {
+  /// Hide the window to the notification area instead of minimizing or closing.
+  final bool minimizeToTray;
+
+  AppPreferences copyWith({
+    String? stacksFolder,
+    String? activeStack,
+    bool? minimizeToTray,
+  }) {
     return AppPreferences(
       stacksFolder: stacksFolder ?? this.stacksFolder,
       activeStack: activeStack ?? this.activeStack,
+      minimizeToTray: minimizeToTray ?? this.minimizeToTray,
     );
   }
 
   Map<String, Object?> toJson() => {
     if (stacksFolder != null) 'stacksFolder': stacksFolder,
     if (activeStack != null) 'activeStack': activeStack,
+    'minimizeToTray': minimizeToTray,
   };
 
   factory AppPreferences.fromJson(Map<String, Object?> json) {
     return AppPreferences(
       stacksFolder: _path(json['stacksFolder']),
       activeStack: _path(json['activeStack']),
+      minimizeToTray: json['minimizeToTray'] is bool
+          ? json['minimizeToTray'] as bool
+          : empty.minimizeToTray,
     );
   }
 

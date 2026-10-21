@@ -26,6 +26,7 @@ void main() {
 
     expect(preferences.stacksFolder, isNull);
     expect(preferences.activeStack, isNull);
+    expect(preferences.minimizeToTray, isTrue);
   });
 
   test('saves and loads the stacks folder and active stack', () async {
@@ -41,6 +42,22 @@ void main() {
     final loaded = AppPreferencesStore(file: file).load();
     expect(loaded.stacksFolder, p.normalize(r'D:\dev\stacks'));
     expect(loaded.activeStack, p.normalize(r'D:\dev\stacks\laragon'));
+    expect(loaded.minimizeToTray, isTrue);
+  });
+
+  test('remembers when minimize to tray is turned off', () async {
+    final store = AppPreferencesStore(file: file);
+
+    await store.save(const AppPreferences(minimizeToTray: false));
+
+    expect(AppPreferencesStore(file: file).load().minimizeToTray, isFalse);
+  });
+
+  test('ignores a minimize to tray value that is not a bool', () async {
+    await file.parent.create(recursive: true);
+    await file.writeAsString('{"minimizeToTray": "no"}');
+
+    expect(AppPreferencesStore(file: file).load().minimizeToTray, isTrue);
   });
 
   test('treats malformed json as empty preferences', () async {
@@ -83,5 +100,6 @@ void main() {
 
     expect(updated.stacksFolder, r'C:\');
     expect(updated.activeStack, r'C:\laragon-wamp');
+    expect(updated.minimizeToTray, isTrue);
   });
 }
