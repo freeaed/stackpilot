@@ -2,7 +2,9 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
+import '../core/app_preferences.dart';
 import '../core/service_manager.dart';
 import '../core/site_inventory.dart';
 import '../core/stack_editor.dart';
@@ -41,11 +43,15 @@ class DashboardPage extends StatefulWidget {
     required this.layout,
     required this.attemptedRoot,
     this.serviceManagerFactory,
+    this.preferences = AppPreferences.empty,
+    this.preferencesStore,
   });
 
   final StackLayout? layout;
   final String attemptedRoot;
   final ServiceManager Function(StackLayout)? serviceManagerFactory;
+  final AppPreferences preferences;
+  final AppPreferencesStore? preferencesStore;
 
   @override
   State<DashboardPage> createState() => _DashboardPageState();
@@ -57,6 +63,7 @@ class _DashboardPageState extends State<DashboardPage> {
   late SiteInventory? _inventory = _layout == null
       ? null
       : SiteInventory.load(_layout!);
+  late AppPreferences _preferences = widget.preferences;
   final Set<StackComponent> _busy = {};
   Timer? _ticker;
   bool _bulkBusy = false;
@@ -99,8 +106,7 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   Future<void> _changeStack() async {
-    final services = _services;
-    if (services?.hasRunningServices == true) {
+    if (_services?.hasRunningServices == true) {
       _showMessage('Stop all services before switching stacks.');
       return;
     }
@@ -110,10 +116,20 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    final layout = StackLayout.detect(path);
+    await _switchToStack(path);
+  }
+
+  /// Opens [root] as the current stack and remembers it for the next launch.
+  Future<void> _switchToStack(String root) async {
+    if (_services?.hasRunningServices == true) {
+      _showMessage('Stop all services before switching stacks.');
+      return;
+    }
+
+    final layout = StackLayout.detect(root);
     if (layout == null) {
       _showMessage(
-        'No Laragon stack found at $path. Expected usr/laragon.ini and bin/.',
+        'No Laragon stack found at $root. Expected usr/laragon.ini and bin/.',
       );
       return;
     }
@@ -125,9 +141,27 @@ class _DashboardPageState extends State<DashboardPage> {
       _busy.clear();
       _bulkBusy = false;
     });
+    _rememberStack(layout);
     await _refreshExternal();
     if (mounted) {
       _showMessage('Using ${layout.root}');
+    }
+  }
+
+  void _rememberStack(StackLayout layout) {
+    final root = p.normalize(layout.root);
+    final folder = _preferences.stacksFolder;
+    final keepFolder =
+        folder != null &&
+        p.isWithin(p.normalize(folder), root) &&
+        p.normalize(folder) != root;
+    _preferences = _preferences.copyWith(
+      activeStack: root,
+      stacksFolder: keepFolder ? folder : p.dirname(root),
+    );
+    final store = widget.preferencesStore;
+    if (store != null) {
+      unawaited(store.save(_preferences));
     }
   }
 
@@ -153,7 +187,8 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 
   void _refresh() {
-    final layout = StackLayout.detect(widget.attemptedRoot);
+    final root = _layout?.root ?? widget.attemptedRoot;
+    final layout = StackLayout.detect(root);
     setState(() {
       _layout = layout;
       _services = _createManager(layout);
@@ -163,16 +198,14 @@ class _DashboardPageState extends State<DashboardPage> {
     if (layout == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'No Laragon-compatible stack found at ${widget.attemptedRoot}.',
-          ),
+          content: Text('No Laragon-compatible stack found at $root.'),
         ),
       );
     }
   }
 
   Future<void> _reloadAfterConfigChange() async {
-    final layout = StackLayout.detect(widget.attemptedRoot);
+    final layout = StackLayout.detect(_layout?.root ?? widget.attemptedRoot);
     if (layout == null) {
       _showMessage('The stack could not be read after the change.');
       return;
@@ -291,12 +324,19 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    final saved = await showStackSettingsDialog(
+    final outcome = await showStackSettingsDialog(
       context,
       layout: layout,
       editor: StackEditor(layout),
+      stacksFolder: _preferences.stacksFolder,
     );
-    if (saved != true || !mounted) {
+    if (outcome == null || !mounted) {
+      return;
+    }
+
+    final target = outcome.stackRoot;
+    if (target != null) {
+      await _switchToStack(target);
       return;
     }
 

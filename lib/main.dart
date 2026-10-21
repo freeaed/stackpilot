@@ -1,31 +1,42 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import 'app.dart';
-import 'core/stack_layout.dart';
-
-const _defaultRootCandidates = [r'C:\laragon-wamp', r'C:\laragon'];
+import 'core/app_preferences.dart';
+import 'core/stack_resolution.dart';
 
 void main(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final requestedRoot = _requestedRoot(args);
-  final layout = requestedRoot != null
-      ? StackLayout.detect(requestedRoot)
-      : _detectInstalledStack();
+  final preferencesStore = AppPreferencesStore();
+  final preferences = preferencesStore.load();
+  final startup = resolveStartupStack(
+    requestedRoot: _requestedRoot(args),
+    preferences: preferences,
+  );
+
+  final layout = startup.layout;
+  if (layout != null && layout.root != preferences.activeStack) {
+    unawaited(
+      preferencesStore.save(preferences.copyWith(activeStack: layout.root)),
+    );
+  }
 
   runApp(
     StackPilotApp(
       layout: layout,
-      attemptedRoot: requestedRoot ?? _defaultRootCandidates.first,
+      attemptedRoot: startup.attemptedRoot,
+      preferences: preferences,
+      preferencesStore: preferencesStore,
     ),
   );
 }
 
 String? _requestedRoot(List<String> args) {
   for (final argument in args) {
-    const prefix = '--stack-root=';
+    final prefix = '--stack-root=';
     if (argument.startsWith(prefix)) {
       final value = argument.substring(prefix.length).trim();
       if (value.isNotEmpty) {
@@ -34,22 +45,13 @@ String? _requestedRoot(List<String> args) {
     }
   }
 
+  final environment = Platform.environment;
   final fromEnvironment =
-      Platform.environment['STACKPILOT_STACK_ROOT'] ??
-      Platform.environment['LARASERVER_STACK_ROOT'];
+      environment['STACKPILOT_STACK_ROOT'] ??
+      environment['LARASERVER_STACK_ROOT'];
   if (fromEnvironment != null && fromEnvironment.trim().isNotEmpty) {
     return fromEnvironment.trim();
   }
 
-  return null;
-}
-
-StackLayout? _detectInstalledStack() {
-  for (final candidate in _defaultRootCandidates) {
-    final layout = StackLayout.detect(candidate);
-    if (layout != null) {
-      return layout;
-    }
-  }
   return null;
 }

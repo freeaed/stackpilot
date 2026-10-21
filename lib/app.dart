@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'core/app_preferences.dart';
 import 'core/service_manager.dart';
 import 'core/stack_layout.dart';
 import 'ui/dashboard.dart';
@@ -10,11 +11,15 @@ class StackPilotApp extends StatelessWidget {
     required this.layout,
     required this.attemptedRoot,
     this.serviceManagerFactory,
+    this.preferences = AppPreferences.empty,
+    this.preferencesStore,
   });
 
   final StackLayout? layout;
   final String attemptedRoot;
   final ServiceManager Function(StackLayout)? serviceManagerFactory;
+  final AppPreferences preferences;
+  final AppPreferencesStore? preferencesStore;
 
   @override
   Widget build(BuildContext context) {
@@ -35,6 +40,8 @@ class StackPilotApp extends StatelessWidget {
         layout: layout,
         attemptedRoot: attemptedRoot,
         serviceManagerFactory: serviceManagerFactory,
+        preferences: preferences,
+        preferencesStore: preferencesStore,
       ),
     );
   }

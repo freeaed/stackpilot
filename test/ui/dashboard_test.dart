@@ -1,9 +1,17 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart'
-    show CheckedPopupMenuItem, FilledButton, Size, SizedBox, Tab, TextField;
+    show
+        CheckedPopupMenuItem,
+        FilledButton,
+        Size,
+        SizedBox,
+        Tab,
+        TextButton,
+        TextField;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:stackpilot/app.dart';
+import 'package:stackpilot/core/app_preferences.dart';
 import 'package:stackpilot/core/service_manager.dart';
 import 'package:stackpilot/core/stack_layout.dart';
 import 'package:path/path.dart' as p;
@@ -37,6 +45,18 @@ class _FakeServiceManager extends ServiceManager {
 
   @override
   bool get hasRunningServices => running;
+}
+
+class _FakePreferencesStore extends AppPreferencesStore {
+  _FakePreferencesStore()
+    : super(file: File(p.join(Directory.systemTemp.path, 'prefs.json')));
+
+  final List<AppPreferences> saved = [];
+
+  @override
+  Future<void> save(AppPreferences preferences) async {
+    saved.add(preferences);
+  }
 }
 
 void main() {
@@ -306,5 +326,60 @@ Use=0
     expect(find.text('Stack not found'), findsOneWidget);
     expect(find.text(r'C:\missing-stack'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('lists stacks in the settings folder and switches to one', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    root = p.join(temp.path, 'current-stack');
+    createStack();
+
+    final other = p.join(temp.path, 'other-stack');
+    File(p.join(other, 'usr', 'laragon.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+    Directory(p.join(other, 'bin')).createSync(recursive: true);
+
+    final layout = StackLayout.detect(root)!;
+    final store = _FakePreferencesStore();
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        preferences: AppPreferences(stacksFolder: temp.path),
+        preferencesStore: store,
+        serviceManagerFactory: (_) => _FakeServiceManager(layout),
+      ),
+    );
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Stacks folder'), findsOneWidget);
+    expect(find.text('other-stack'), findsOneWidget);
+    expect(find.text('Current'), findsOneWidget);
+
+    final useButton = find.widgetWithText(TextButton, 'Use');
+    expect(useButton, findsOneWidget);
+    expect(tester.widget<TextButton>(useButton).onPressed, isNotNull);
+    await tester.ensureVisible(useButton);
+    await tester.pumpAndSettle();
+    await tester.tap(useButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Stack settings'), findsNothing);
+
+    expect(store.saved, isNotEmpty);
+    expect(store.saved.last.activeStack, p.normalize(other));
+    expect(store.saved.last.stacksFolder, p.normalize(temp.path));
+    expect(find.textContaining('Using ${p.normalize(other)}'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
   });
 }

@@ -95,14 +95,20 @@ class StackLayout {
   final Map<StackComponent, List<StackInstall>> _installed;
   final Map<StackComponent, StackInstall?> _active;
 
+  /// True when [root] contains the files that identify a Laragon stack.
+  static bool isStackRoot(String root) {
+    final resolved = _normalizeRoot(root);
+    return File(p.join(resolved, 'usr', 'laragon.ini')).existsSync() &&
+        Directory(p.join(resolved, 'bin')).existsSync();
+  }
+
   /// Returns a layout when [root] contains `usr/laragon.ini` and `bin/`.
   static StackLayout? detect(String root) {
     final resolved = _normalizeRoot(root);
-    final configFile = File(p.join(resolved, 'usr', 'laragon.ini'));
-    if (!configFile.existsSync() ||
-        !Directory(p.join(resolved, 'bin')).existsSync()) {
+    if (!isStackRoot(resolved)) {
       return null;
     }
+    final configFile = File(p.join(resolved, 'usr', 'laragon.ini'));
 
     final IniDocument config;
     try {

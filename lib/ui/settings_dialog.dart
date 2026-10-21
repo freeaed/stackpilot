@@ -1,7 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
+import '../core/stack_catalog.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
 import '../core/stack_settings.dart';
@@ -16,23 +18,43 @@ const _serviceLabels = {
   StackComponent.mailpit: 'Mailpit',
 };
 
-Future<bool?> showStackSettingsDialog(
+/// What the user asked for when the settings dialog closed.
+class StackSettingsOutcome {
+  const StackSettingsOutcome.saved() : stackRoot = null;
+
+  /// Close the dialog and open [stackRoot] instead of the current stack.
+  const StackSettingsOutcome.switchTo(this.stackRoot);
+
+  final String? stackRoot;
+}
+
+Future<StackSettingsOutcome?> showStackSettingsDialog(
   BuildContext context, {
   required StackLayout layout,
   required StackEditor editor,
+  String? stacksFolder,
 }) {
-  return showDialog<bool>(
+  return showDialog<StackSettingsOutcome>(
     context: context,
     barrierDismissible: false,
-    builder: (context) => _StackSettingsDialog(layout: layout, editor: editor),
+    builder: (context) => _StackSettingsDialog(
+      layout: layout,
+      editor: editor,
+      stacksFolder: stacksFolder,
+    ),
   );
 }
 
 class _StackSettingsDialog extends StatefulWidget {
-  const _StackSettingsDialog({required this.layout, required this.editor});
+  const _StackSettingsDialog({
+    required this.layout,
+    required this.editor,
+    this.stacksFolder,
+  });
 
   final StackLayout layout;
   final StackEditor editor;
+  final String? stacksFolder;
 
   @override
   State<_StackSettingsDialog> createState() => _StackSettingsDialogState();
@@ -69,6 +91,12 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     ..._settings.enabledServices,
   };
 
+  late final TextEditingController _stacksFolder = TextEditingController(
+    text: widget.stacksFolder ?? p.dirname(widget.layout.root),
+  );
+  late List<String> _detectedStacks = _scanStacks(_stacksFolder.text);
+  bool _switching = false;
+
   bool _saving = false;
   String? _error;
 
@@ -81,7 +109,38 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     _uploadMax.dispose();
     _postMax.dispose();
     _executionTime.dispose();
+    _stacksFolder.dispose();
     super.dispose();
+  }
+
+  List<String> _scanStacks(String folder) {
+    final discovered = StackCatalog.scan(folder.trim());
+    final current = p.normalize(widget.layout.root);
+    if (discovered.any((root) => p.equals(root, current))) {
+      return discovered;
+    }
+    return [current, ...discovered];
+  }
+
+  Future<void> _browseStacksFolder() async {
+    final path = await pickFolder('Select the folder that contains your stacks');
+    if (path == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _stacksFolder.text = path;
+      _detectedStacks = _scanStacks(path);
+    });
+  }
+
+  Future<void> _useStack(String root) async {
+    if (_switching || _saving) {
+      return;
+    }
+    setState(() => _switching = true);
+    if (mounted) {
+      Navigator.of(context).pop(StackSettingsOutcome.switchTo(root));
+    }
   }
 
   Future<void> _save() async {
@@ -142,7 +201,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     try {
       widget.editor.applySettings(settings);
       if (mounted) {
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop(const StackSettingsOutcome.saved());
       }
     } on StackEditException catch (error) {
       _fail(error.message);
@@ -178,11 +237,12 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         width: 620,
         height: 470,
         child: DefaultTabController(
-          length: 4,
+          length: 5,
           child: Column(
             children: [
               const TabBar(
                 tabs: [
+                  Tab(text: 'Stacks'),
                   Tab(text: 'General'),
                   Tab(text: 'Services'),
                   Tab(text: 'MySQL'),
@@ -193,6 +253,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
               Expanded(
                 child: TabBarView(
                   children: [
+                    _stacksTab(),
                     _generalTab(),
                     _servicesTab(),
                     _mysqlTab(),
@@ -223,11 +284,13 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: _saving ? null : () => Navigator.of(context).pop(false),
+          onPressed: _saving || _switching
+              ? null
+              : () => Navigator.of(context).pop(),
           child: const Text('Cancel'),
         ),
         FilledButton.icon(
-          onPressed: _saving ? null : _save,
+          onPressed: _saving || _switching ? null : _save,
           icon: _saving
               ? const SizedBox(
                   width: 16,
@@ -236,6 +299,97 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                 )
               : const Icon(Icons.save_outlined, size: 18),
           label: Text(_saving ? 'Saving…' : 'Save settings'),
+        ),
+      ],
+    );
+  }
+
+  Widget _stacksTab() {
+    final currentRoot = p.normalize(widget.layout.root);
+    return ListView(
+      padding: const EdgeInsets.only(top: 4),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: TextField(
+                controller: _stacksFolder,
+                enabled: !_saving && !_switching,
+                onSubmitted: (value) =>
+                    setState(() => _detectedStacks = _scanStacks(value)),
+                decoration: const InputDecoration(
+                  labelText: 'Stacks folder',
+                  border: OutlineInputBorder(),
+                  helperText:
+                      'Parent folder that contains your Laragon stacks, for '
+                      'example C:\\ or D:\\dev\\stacks.',
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: IconButton.filledTonal(
+                tooltip: 'Browse…',
+                onPressed: _saving || _switching ? null : _browseStacksFolder,
+                icon: const Icon(Icons.folder_open),
+              ),
+            ),
+            const SizedBox(width: 4),
+            Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: IconButton.filledTonal(
+                tooltip: 'Scan again',
+                onPressed: _saving || _switching
+                    ? null
+                    : () => setState(
+                        () => _detectedStacks = _scanStacks(_stacksFolder.text),
+                      ),
+                icon: const Icon(Icons.refresh),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        Text('Stacks in this folder', style: Theme.of(context).textTheme.titleSmall),
+        const SizedBox(height: 4),
+        if (_detectedStacks.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 12),
+            child: Text(
+              'No Laragon stack was found in that folder. Each stack needs '
+              'usr\\laragon.ini and a bin folder.',
+              style: TextStyle(fontSize: 12.5, color: Color(0xFF7A8880)),
+            ),
+          )
+        else
+          for (final root in _detectedStacks)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.folder_outlined),
+              title: Text(p.basename(root)),
+              subtitle: Text(root, style: const TextStyle(fontSize: 12)),
+              trailing: p.equals(root, currentRoot)
+                  ? const Text(
+                      'Current',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF0E7A4A),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    )
+                  : TextButton(
+                      onPressed: _saving || _switching
+                          ? null
+                          : () => _useStack(root),
+                      child: const Text('Use'),
+                    ),
+            ),
+        const SizedBox(height: 8),
+        const _Hint(
+          'Switching stacks closes this dialog and keeps running services '
+          'untouched, so stop them first.',
         ),
       ],
     );

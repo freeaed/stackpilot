@@ -28,6 +28,11 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
   app at another Laragon-compatible folder, such as `C:\laragon` instead of
   `C:\laragon-wamp`. The version menus immediately reflect that stack's
   installed versions.
+- **Stacks folder** – open **Settings → Stacks** to set the parent folder that
+  contains your stacks. StackPilot lists every Laragon stack it finds there and
+  switches with **Use**. The folder and the last stack are remembered in
+  `%APPDATA%\StackPilot\preferences.json`, so the next launch opens the same
+  stack.
 - **Stack settings** – change the document root, Laragon data directory,
   automatic virtual hosts, Apache SSL, enabled services, MySQL port, and
   common PHP `php.ini` limits in one dialog.
@@ -58,9 +63,11 @@ $env:STACKPILOT_STACK_ROOT = 'C:\laragon'
 flutter run -d windows
 ```
 
-Without either option, StackPilot looks in `C:\laragon-wamp` and `C:\laragon`.
-You can also click **Change stack** in the header to browse to a stack folder
-while the app is running. Stop running services first so the next stack starts
+Without either option, StackPilot opens the stack used last, then the first
+stack inside the saved stacks folder, and finally `C:\laragon-wamp` or
+`C:\laragon`. You can also click **Change stack** in the header to browse to a
+stack folder while the app is running, or set the stacks folder in
+**Settings → Stacks**. Stop running services first so the next stack starts
 cleanly.
 
 The **Version** menus only show builds that are physically installed in the
