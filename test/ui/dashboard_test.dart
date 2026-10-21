@@ -44,6 +44,11 @@ class _FakeServiceManager extends ServiceManager {
   bool isRunning(StackComponent component) => running;
 
   @override
+  Iterable<StackComponent> get runningComponents => running
+      ? StackLayout.serviceComponents.where(layout.serviceEnabled)
+      : const [];
+
+  @override
   bool get hasRunningServices => running;
 }
 
@@ -86,12 +91,10 @@ void main() {
     createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
     createFile(r'data\postgresql\PG_VERSION');
     createFile(r'data\postgresql\postgresql.conf');
-    File(p.join(root, 'data', 'postgresql', 'PG_VERSION')).writeAsStringSync(
-      '16',
-    );
-    File(
-      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
-    ).writeAsStringSync('port = 5432\n');
+    File(p.join(root, 'data', 'postgresql', 'PG_VERSION'))
+        .writeAsStringSync('16');
+    File(p.join(root, 'data', 'postgresql', 'postgresql.conf'))
+        .writeAsStringSync('port = 5432\n');
     createFile(r'bin\php\php-8.3.30\php.exe');
     createFile(r'etc\ssl\laragon.crt');
     createFile(r'etc\ssl\laragon.key');
@@ -280,9 +283,8 @@ Version=postgresql-x64-16
     final ini = File(p.join(root, 'usr', 'laragon.ini')).readAsStringSync();
     expect(ini, contains('Port=5434'));
 
-    final conf = File(
-      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
-    ).readAsStringSync();
+    final conf = File(p.join(root, 'data', 'postgresql', 'postgresql.conf'))
+        .readAsStringSync();
     expect(RegExp(r'port\s*=\s*5434').hasMatch(conf), isTrue);
 
     await tester.pumpWidget(const SizedBox());
@@ -346,6 +348,9 @@ Version=postgresql-x64-16
     expect(find.text('shop'), findsOneWidget);
     expect(find.text('SSL'), findsNWidgets(2));
     expect(find.textContaining('No donation prompts'), findsOneWidget);
+    expect(find.text('All stopped'), findsOneWidget);
+    expect(find.byTooltip('Rescan stack folder'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'blog.test'), findsOneWidget);
   });
 
   testWidgets('starts and stops services from the header', (tester) async {
@@ -369,10 +374,12 @@ Version=postgresql-x64-16
     await tester.tap(find.text('Start All'));
     await tester.pump();
     expect(services.startAllCalls, 1);
+    expect(find.text('3 running'), findsOneWidget);
 
     await tester.tap(find.text('Stop All'));
     await tester.pump();
     expect(services.stopAllCalls, 1);
+    expect(find.text('All stopped'), findsOneWidget);
 
     await tester.pumpWidget(const SizedBox());
   });

@@ -201,9 +201,7 @@ class _DashboardPageState extends State<DashboardPage> {
 
     if (layout == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('No Laragon-compatible stack found at $root.'),
-        ),
+        SnackBar(content: Text('No Laragon-compatible stack found at $root.')),
       );
     }
   }
@@ -542,7 +540,8 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  void _showMessage(String message) {    if (!mounted) {
+  void _showMessage(String message) {
+    if (!mounted) {
       return;
     }
     ScaffoldMessenger.of(context)
@@ -562,6 +561,7 @@ class _DashboardPageState extends State<DashboardPage> {
         );
     final canStopAll =
         services != null && !_bulkBusy && services.hasRunningServices;
+    final runningServices = services?.runningComponents.length ?? 0;
 
     return Scaffold(
       body: layout == null
@@ -573,6 +573,7 @@ class _DashboardPageState extends State<DashboardPage> {
               children: [
                 _Header(
                   layout: layout,
+                  runningServices: runningServices,
                   onStartAll: canStartAll ? _startAll : null,
                   onStopAll: canStopAll ? _stopAll : null,
                   onOpenWeb: () => _openUrl('http://localhost'),
@@ -582,6 +583,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   onOpenLogs: _openLogs,
                   onSettings: _openSettings,
                   onChangeStack: _changeStack,
+                  onRescan: _refresh,
                 ),
                 Expanded(
                   child: Row(
@@ -606,6 +608,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           layout: layout,
                           inventory: _inventory,
                           onOpenPath: _openPath,
+                          onOpenUrl: _openUrl,
                           onGenerate:
                               (_inventory?.missingConfigs.isNotEmpty ?? false)
                               ? _generateVhosts
@@ -625,6 +628,7 @@ class _DashboardPageState extends State<DashboardPage> {
 class _Header extends StatelessWidget {
   const _Header({
     required this.layout,
+    required this.runningServices,
     required this.onStartAll,
     required this.onStopAll,
     required this.onOpenWeb,
@@ -634,9 +638,11 @@ class _Header extends StatelessWidget {
     required this.onOpenLogs,
     required this.onSettings,
     required this.onChangeStack,
+    required this.onRescan,
   });
 
   final StackLayout layout;
+  final int runningServices;
   final VoidCallback? onStartAll;
   final VoidCallback? onStopAll;
   final VoidCallback onOpenWeb;
@@ -646,9 +652,15 @@ class _Header extends StatelessWidget {
   final VoidCallback onOpenLogs;
   final VoidCallback onSettings;
   final VoidCallback onChangeStack;
+  final VoidCallback onRescan;
 
   @override
   Widget build(BuildContext context) {
+    final running = runningServices > 0;
+    final badgeColor = running
+        ? const Color(0xFFB9F0D3)
+        : const Color(0xFFD5DEDA);
+
     return Container(
       padding: const EdgeInsets.fromLTRB(22, 18, 22, 16),
       decoration: const BoxDecoration(
@@ -705,19 +717,29 @@ class _Header extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: Colors.white.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.18),
+                  ),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(
-                      Icons.check_circle_outline,
-                      size: 15,
-                      color: Colors.white70,
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: badgeColor,
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                    SizedBox(width: 6),
+                    const SizedBox(width: 7),
                     Text(
-                      'Detected',
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                      running ? '$runningServices running' : 'All stopped',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ],
                 ),
@@ -751,6 +773,18 @@ class _Header extends StatelessWidget {
                   visualDensity: VisualDensity.compact,
                   textStyle: const TextStyle(fontSize: 11.5),
                 ),
+              ),
+              IconButton(
+                onPressed: onRescan,
+                icon: const Icon(Icons.refresh, size: 16),
+                tooltip: 'Rescan stack folder',
+                color: Colors.white70,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 26,
+                  height: 26,
+                ),
+                visualDensity: VisualDensity.compact,
               ),
             ],
           ),
@@ -786,7 +820,8 @@ class _Header extends StatelessWidget {
                 icon: Icons.article_outlined,
                 label: 'Logs',
                 onPressed: onOpenLogs,
-                tooltip: 'View Apache, Nginx, MySQL, PostgreSQL, and Redis logs',
+                tooltip:
+                    'View Apache, Nginx, MySQL, PostgreSQL, and Redis logs',
               ),
               _HeaderAction(
                 icon: Icons.terminal,
@@ -1017,7 +1052,18 @@ class _ServiceCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFE1E8E4)),
+        border: Border.all(
+          color: running ? const Color(0xFF8ACFAA) : const Color(0xFFE1E8E4),
+        ),
+        boxShadow: running
+            ? const [
+                BoxShadow(
+                  color: Color(0x140E7A4A),
+                  blurRadius: 14,
+                  offset: Offset(0, 4),
+                ),
+              ]
+            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1241,12 +1287,14 @@ class _ProjectsPanel extends StatelessWidget {
     required this.layout,
     required this.inventory,
     required this.onOpenPath,
+    required this.onOpenUrl,
     required this.onGenerate,
   });
 
   final StackLayout layout;
   final SiteInventory? inventory;
   final ValueChanged<String> onOpenPath;
+  final ValueChanged<String> onOpenUrl;
   final VoidCallback? onGenerate;
 
   @override
@@ -1330,12 +1378,27 @@ class _ProjectsPanel extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     if (layout.autoVirtualHosts)
-                      Text(
-                        site.host,
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          color: Color(0xFF0E7A4A),
-                          fontWeight: FontWeight.w600,
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: () => onOpenUrl('http://${site.host}'),
+                          icon: const Icon(Icons.open_in_new, size: 12),
+                          iconAlignment: IconAlignment.end,
+                          label: Text(site.host),
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFF0E7A4A),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 2,
+                              vertical: 1,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            visualDensity: VisualDensity.compact,
+                            textStyle: const TextStyle(
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                       ),
                     Text(
