@@ -10,6 +10,7 @@ import '../core/site_inventory.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
 import 'database_dialog.dart';
+import 'logs_dialog.dart';
 import 'settings_dialog.dart';
 import 'version_dialog.dart';
 import 'windows_dialogs.dart';
@@ -504,6 +505,18 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
+  Future<void> _openLogs() async {
+    final layout = _layout;
+    if (layout == null) {
+      return;
+    }
+    await showServiceLogsDialog(
+      context,
+      layout: layout,
+      onOpenFolder: _openPath,
+    );
+  }
+
   Future<void> _openTerminal() async {
     final layout = _layout;
     if (layout == null) {
@@ -566,6 +579,7 @@ class _DashboardPageState extends State<DashboardPage> {
                   onOpenTerminal: _openTerminal,
                   onOpenRoot: () => _openPath(layout.documentRoot),
                   onOpenDatabase: _openDatabase,
+                  onOpenLogs: _openLogs,
                   onSettings: _openSettings,
                   onChangeStack: _changeStack,
                 ),
@@ -617,6 +631,7 @@ class _Header extends StatelessWidget {
     required this.onOpenTerminal,
     required this.onOpenRoot,
     required this.onOpenDatabase,
+    required this.onOpenLogs,
     required this.onSettings,
     required this.onChangeStack,
   });
@@ -628,6 +643,7 @@ class _Header extends StatelessWidget {
   final VoidCallback onOpenTerminal;
   final VoidCallback onOpenRoot;
   final VoidCallback onOpenDatabase;
+  final VoidCallback onOpenLogs;
   final VoidCallback onSettings;
   final VoidCallback onChangeStack;
 
@@ -765,6 +781,12 @@ class _Header extends StatelessWidget {
                 label: 'Database',
                 onPressed: onOpenDatabase,
                 tooltip: 'Open phpMyAdmin, or install it in the web root',
+              ),
+              _HeaderAction(
+                icon: Icons.article_outlined,
+                label: 'Logs',
+                onPressed: onOpenLogs,
+                tooltip: 'View Apache, Nginx, MySQL, PostgreSQL, and Redis logs',
               ),
               _HeaderAction(
                 icon: Icons.terminal,

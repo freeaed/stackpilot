@@ -48,6 +48,11 @@ real Apache/Nginx, PHP, MySQL, and Node binaries underneath.
   the notification area so started services keep running. Click the tray icon
   (or choose **Show StackPilot**) to bring the window back, and choose
   **Exit StackPilot** to quit. Exiting stops the services StackPilot owns.
+- **Service logs** – the **Logs** action opens the current stack's service logs:
+  Apache and Nginx access/error logs, MySQL `.err` and slow-query logs,
+  PostgreSQL collector logs, and Redis logs. The viewer follows the file while
+  it grows, shows only the newest lines of a large log, and can open the log
+  folder.
 - **Local only** – no telemetry, no donation prompts.
 
 ## Configuration safety
