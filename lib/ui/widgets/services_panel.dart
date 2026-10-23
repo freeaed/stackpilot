@@ -17,6 +17,7 @@ class ServicesPanel extends StatelessWidget {
     required this.onSelectVersion,
     required this.onAddVersion,
     this.onSetupStack,
+    this.onAdopt,
   });
 
   final StackLayout layout;
@@ -30,6 +31,9 @@ class ServicesPanel extends StatelessWidget {
 
   /// Opens the starter-stack setup dialog. Null hides the setup controls.
   final VoidCallback? onSetupStack;
+
+  /// Adopts a Laragon stack in place. Null hides the adoption banner.
+  final VoidCallback? onAdopt;
 
   @override
   Widget build(BuildContext context) {
@@ -71,6 +75,10 @@ class ServicesPanel extends StatelessWidget {
         if (noComponents && onSetupStack != null) ...[
           const SizedBox(height: 14),
           _SetupBanner(onSetup: onSetupStack!),
+        ],
+        if (layout.flavor == StackFlavor.laragon && onAdopt != null) ...[
+          const SizedBox(height: 14),
+          _AdoptBanner(onAdopt: onAdopt!),
         ],
         const SizedBox(height: 14),
         Text(
@@ -413,6 +421,60 @@ class _MutedChip extends StatelessWidget {
       child: Text(
         label,
         style: const TextStyle(fontSize: 11.5, color: Color(0xFF52605A)),
+      ),
+    );
+  }
+}
+
+class _AdoptBanner extends StatelessWidget {
+  const _AdoptBanner({required this.onAdopt});
+
+  final VoidCallback onAdopt;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF7E8),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFEAD9B4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.move_to_inbox_outlined,
+            size: 26,
+            color: Color(0xFF9A6B16),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'This folder is a Laragon stack',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Adopt it in place to let StackPilot manage its launcher and '
+                  'configs. Nothing is copied or moved, and Laragon can still '
+                  'open the folder.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B5A38)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: onAdopt,
+            icon: const Icon(Icons.check_circle_outline, size: 17),
+            label: const Text('Adopt stack'),
+          ),
+        ],
       ),
     );
   }

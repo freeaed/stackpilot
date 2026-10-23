@@ -28,6 +28,9 @@ void main() {
     File(p.join(apache.directory, 'conf', 'openssl.cnf'))
       ..createSync(recursive: true)
       ..writeAsStringSync('');
+    File(
+      p.join(apache.directory, 'modules', 'mod_mpm_winnt.so'),
+    ).createSync(recursive: true);
     File(p.join(apache.directory, 'conf', 'httpd.conf'))
         .writeAsStringSync('ServerRoot "C:/Apache24"\nListen 80\n');
     layout = StackLayout.detect(layout.root)!;

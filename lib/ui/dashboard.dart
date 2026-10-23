@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../core/app_preferences.dart';
 import '../core/service_manager.dart';
 import '../core/site_inventory.dart';
+import '../core/stack_adoption.dart';
 import '../core/stack_bootstrap.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
@@ -356,7 +357,95 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _addVersion(StackComponent component) async {    final layout = _layout;
+  Future<void> _adoptStack() async {
+    final layout = _layout;
+    if (layout == null || layout.flavor != StackFlavor.laragon) {
+      return;
+    }
+
+    final services = _services;
+    if (services != null) {
+      try {
+        await services.refreshExternal();
+      } on ProcessException catch (error) {
+        _showMessage('Could not inspect running services: ${error.message}');
+        return;
+      }
+      if (!mounted) {
+        return;
+      }
+      if (services.hasRunningServices) {
+        final names = services.runningComponents
+            .map((component) => componentLabels[component])
+            .join(', ');
+        _showMessage('Stop $names before adopting this stack.');
+        return;
+      }
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Adopt this Laragon stack?'),
+        content: const Text(
+          'StackPilot takes over this folder in place. It writes '
+          'usr\\stackpilot.ini, regenerates the Apache config and the '
+          'launcher, and selects the versions Laragon had active.\n\n'
+          'Files are not copied or moved. usr\\laragon.ini is kept, so '
+          'Laragon can still open the same folder.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Adopt'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    try {
+      final result = StackAdoption.adopt(layout.root);
+      await _reloadAfterConfigChange();
+      if (!mounted) {
+        return;
+      }
+
+      if (result.warnings.isEmpty) {
+        _showMessage('This stack is now managed by StackPilot.');
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Stack adopted with notes'),
+          content: SingleChildScrollView(
+            child: Text(result.warnings.join('\n\n')),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+          ],
+        ),
+      );
+    } on StackAdoptionException catch (error) {
+      _showMessage(error.message);
+    } on FileSystemException catch (error) {
+      _showMessage('Could not adopt the stack: ${error.message}');
+    }
+  }
+
+  Future<void> _addVersion(StackComponent component) async {
+    final layout = _layout;
     if (layout == null) {
       return;
     }
@@ -780,6 +869,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           onSelectVersion: _selectVersion,
                           onAddVersion: _addVersion,
                           onSetupStack: _openSetup,
+                          onAdopt: _adoptStack,
                         ),
                       ),
                       const VerticalDivider(width: 1),

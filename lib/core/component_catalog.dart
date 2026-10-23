@@ -88,8 +88,8 @@ class ComponentCatalog {
     url:
         'https://www.apachelounge.com/download/VS18/binaries/'
         'httpd-2.4.69-261002-Win64-VS18.zip',
-    sha256: 'ca272e0b75abad78b1e4029a0753b20ff2232d2d857e8eebeea5d469c5776977',
-    sizeBytes: 14495717,
+    sha256: '9f1f93cab9a0c6dc5e628aa640784bb30347f93fcd01b46a4c0d6b5ba76bf4e2',
+    sizeBytes: 14495714,
     notes: 'Apache Lounge build. Needs the Microsoft Visual C++ runtime.',
   );
 

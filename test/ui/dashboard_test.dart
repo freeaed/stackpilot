@@ -422,6 +422,46 @@ Version=postgresql-x64-16
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('adopts a Laragon stack in place', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    createStack();
+    final layout = StackLayout.detect(root)!;
+    expect(layout.flavor, StackFlavor.laragon);
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        serviceManagerFactory: (_) => _FakeServiceManager(layout),
+      ),
+    );
+
+    expect(find.text('This folder is a Laragon stack'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, 'Adopt stack'));
+    await tester.pumpAndSettle();
+    expect(find.text('Adopt this Laragon stack?'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(FilledButton, 'Adopt'));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('This stack is now managed by StackPilot.'),
+      findsOneWidget,
+    );
+    expect(
+      File(p.join(root, 'usr', 'stackpilot.ini')).existsSync(),
+      isTrue,
+    );
+    expect(File(p.join(root, 'bin', 'stackpilot.cmd')).existsSync(), isTrue);
+    expect(StackLayout.detect(root)!.flavor, StackFlavor.stackpilot);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets('offers to create a stack when none is found', (tester) async {
     await tester.pumpWidget(
       const StackPilotApp(layout: null, attemptedRoot: r'C:\missing-stack'),

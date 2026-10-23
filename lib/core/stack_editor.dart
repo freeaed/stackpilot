@@ -301,40 +301,45 @@ class StackEditor {
       );
     }
 
-    final iniFile = File(_markerPath);
-    final source = _readText(iniFile) ?? '';
-    final editor = IniEditor.parse(source)
-      ..setValue('preferences', 'DataDir', dataDirectory)
-      ..setValue(
-        'preferences',
-        'AutoVirtualHosts',
-        settings.autoVirtualHosts ? '-1' : '0',
-      )
-      ..setValue(
-        'preferences',
-        'DocumentRootList',
-        _replaceFirstRoot(
-          layout.config.value('preferences', 'DocumentRootList'),
-          documentRoot,
-        ),
-      )
-      ..setValue('apache', 'DocumentRoot', documentRoot)
-      ..setValue('apache', 'SSLEnabled', settings.apacheSsl ? '-1' : '0')
-      ..setValue('mysql', 'Port', '${settings.mysqlPort}')
-      ..setValue('postgresql', 'Port', '${settings.postgresqlPort}');
+    for (final iniFile in _markerTargets) {
+      final source = _readText(iniFile) ?? '';
+      final editor = IniEditor.parse(source)
+        ..setValue('preferences', 'DataDir', dataDirectory)
+        ..setValue(
+          'preferences',
+          'AutoVirtualHosts',
+          settings.autoVirtualHosts ? '-1' : '0',
+        )
+        ..setValue(
+          'preferences',
+          'DocumentRootList',
+          _replaceFirstRoot(
+            layout.config.value('preferences', 'DocumentRootList'),
+            documentRoot,
+          ),
+        )
+        ..setValue('apache', 'DocumentRoot', documentRoot)
+        ..setValue('apache', 'SSLEnabled', settings.apacheSsl ? '-1' : '0')
+        ..setValue('mysql', 'Port', '${settings.mysqlPort}')
+        ..setValue('postgresql', 'Port', '${settings.postgresqlPort}');
 
-    for (final component in StackLayout.serviceComponents) {
-      editor.setValue(
-        component.directoryName,
-        'Use',
-        settings.enabledServices.contains(component) ? '-1' : '0',
-      );
+      for (final component in StackLayout.serviceComponents) {
+        editor.setValue(
+          component.directoryName,
+          'Use',
+          settings.enabledServices.contains(component) ? '-1' : '0',
+        );
+      }
+
+      _writeWithBackup(iniFile, editor.serialize());
     }
 
-    _writeWithBackup(iniFile, editor.serialize());
-
     if (!p.equals(documentRoot, layout.documentRoot)) {
-      _updateApacheDocumentRoot(layout.documentRoot, documentRoot);
+      _updateApacheDocumentRoot(
+        layout.documentRoot,
+        documentRoot,
+        includeApacheConfig: layout.flavor == StackFlavor.laragon,
+      );
     }
     if (settings.mysqlPort != layout.mysqlPort) {
       _updateMysqlPort(settings.mysqlPort);
@@ -343,6 +348,12 @@ class StackEditor {
       _updatePostgresqlPort(settings.postgresqlPort);
     }
     _applyPhpSettings(settings.php);
+
+    // A generated Apache config carries the document root and SSL setting, so
+    // rewrite it after the marker changes.
+    if (layout.flavor != StackFlavor.laragon) {
+      refreshApacheConfig();
+    }
   }
 
   /// Turns a service on or off in the stack marker.
@@ -350,14 +361,32 @@ class StackEditor {
   /// Provisioning uses this after a component is installed so the service can
   /// be started without opening the settings dialog first.
   void setServiceEnabled(StackComponent component, bool enabled) {
-    final file = File(_markerPath);
-    final source = _readText(file);
-    if (source == null) {
-      return;
+    for (final file in _markerTargets) {
+      final source = _readText(file);
+      if (source == null) {
+        continue;
+      }
+      final editor = IniEditor.parse(source)
+        ..setValue(component.directoryName, 'Use', enabled ? '-1' : '0');
+      _writeWithBackup(file, editor.serialize());
     }
-    final editor = IniEditor.parse(source)
-      ..setValue(component.directoryName, 'Use', enabled ? '-1' : '0');
-    _writeWithBackup(file, editor.serialize());
+  }
+
+  /// Marker files to keep in sync.
+  ///
+  /// An adopted Laragon stack keeps both `usr/stackpilot.ini` and
+  /// `usr/laragon.ini`, so Laragon can still open it. Writing the same version
+  /// and settings to both markers keeps the two views from drifting.
+  List<File> get _markerTargets {
+    final files = <File>[File(_markerPath)];
+    final other = layout.flavor == StackFlavor.laragon
+        ? StackFlavor.stackpilot
+        : StackFlavor.laragon;
+    final path = p.join(_root, 'usr', other.markerFileName);
+    if (!p.equals(path, _markerPath) && File(path).existsSync()) {
+      files.add(File(path));
+    }
+    return files;
   }
 
   /// Re-applies the stack paths to the active Apache config.
@@ -649,13 +678,27 @@ class StackEditor {
         .join(eol);
   }
 
+  /// Writes the Apache config for this stack.
+  ///
+  /// StackPilot stacks get a complete config generated from a template, so the
+  /// document root, SSL, and enabled modules always match the stack marker.
+  /// Laragon stacks keep their vendor config and are patched in place, because
+  /// Laragon still owns that file.
+  void _prepareApacheConfig(StackInstall install) {
+    if (layout.flavor == StackFlavor.laragon) {
+      _patchApacheConfig(install);
+      return;
+    }
+    _writeApacheConfig(install);
+  }
+
   /// Rewrites an Apache download so it uses this stack's paths and files.
   ///
   /// Apache Lounge archives are built for `C:/Apache24`: their `ServerRoot`
   /// and `DocumentRoot` point outside the stack, Laragon's includes are
   /// missing, and modules such as rewrite/SSL start commented out. Patch
   /// those directives while keeping the rest of the vendor config intact.
-  void _prepareApacheConfig(StackInstall install) {
+  void _patchApacheConfig(StackInstall install) {
     final file = File(p.join(install.directory, 'conf', 'httpd.conf'));
     final source = _readText(file);
     if (source == null) {
@@ -788,6 +831,218 @@ class StackEditor {
     }
   }
 
+  /// Marker at the top of the generated Apache config.
+  static const _apacheTemplateMarker =
+      '# StackPilot Apache configuration - generated, do not edit';
+
+  /// Modules StackPilot loads when Apache ships their `mod_*.so` file.
+  ///
+  /// Order matters: MPM first, then modules other directives depend on
+  /// (authentication, logging, MIME, rewrite), and SSL last. PHP is loaded by
+  /// `etc/apache2/mod_php.conf`, so changing the PHP version never requires
+  /// rewriting this file. Apache Lounge builds `mpm_winnt` into `httpd.exe`
+  /// and has no `mod_mpm_winnt.so`, so a missing module is simply skipped.
+  static const List<String> _templateApacheModules = [
+    'mpm_winnt',
+    'authn_core',
+    'authn_file',
+    'authz_core',
+    'authz_host',
+    'authz_user',
+    'authz_groupfile',
+    'access_compat',
+    'auth_basic',
+    'log_config',
+    'logio',
+    'env',
+    'setenvif',
+    'filter',
+    'version',
+    'headers',
+    'alias',
+    'dir',
+    'autoindex',
+    'mime',
+    'rewrite',
+    'reqtimeout',
+    'expires',
+    'deflate',
+    'socache_shmcb',
+    'ssl',
+  ];
+
+  /// Writes a complete `conf/httpd.conf` for a StackPilot stack.
+  ///
+  /// The Apache Lounge config is preserved as `conf/httpd.conf.vendor` the
+  /// first time, so nothing is lost. Log paths stay relative to `ServerRoot`
+  /// because the log viewer reads `logs/error.log` from the install directory.
+  void _writeApacheConfig(StackInstall install) {
+    final directory = install.directory;
+
+    final file = File(p.join(directory, 'conf', 'httpd.conf'));
+    final vendor = File('${file.path}.vendor');
+    final existing = _readText(file);
+    if (existing != null && !vendor.existsSync()) {
+      try {
+        file.copySync(vendor.path);
+      } on FileSystemException {
+        // The generated config below is what matters; a read-only vendor file
+        // is not worth failing over.
+      }
+    }
+
+    final available = _availableApacheModules(directory);
+    final installPath = _slash(directory);
+    final documentRoot = _slash(layout.documentRoot);
+    final etcDirectory = p.join(_root, 'etc', 'apache2');
+    final etcPath = _slash(etcDirectory);
+    Directory(p.join(directory, 'logs')).createSync(recursive: true);
+
+    final lines = <String>[
+      _apacheTemplateMarker,
+      '# The Apache Lounge original is kept as httpd.conf.vendor.',
+      '',
+      'ServerRoot "$installPath"',
+      'Listen 80',
+      'ServerName localhost',
+      'ServerAdmin admin@localhost',
+      '',
+      '# --- Modules --------------------------------------------------------',
+    ];
+
+    for (final module in _templateApacheModules) {
+      final fileName = 'mod_$module.so';
+      if (!available.contains(fileName)) {
+        continue;
+      }
+      lines.add('LoadModule ${module}_module "modules/$fileName"');
+    }
+
+    lines.addAll([
+      '',
+      '<IfModule mpm_winnt_module>',
+      '    ThreadsPerChild 150',
+      '    MaxConnectionsPerChild 0',
+      '</IfModule>',
+      '',
+      'DocumentRoot "$documentRoot"',
+      '<Directory "$documentRoot">',
+      '    Options Indexes FollowSymLinks',
+      '    AllowOverride All',
+      '    Require all granted',
+      '</Directory>',
+      '<Directory />',
+      '    AllowOverride None',
+      '    Require all denied',
+      '</Directory>',
+      '<Files ".ht*">',
+      '    Require all denied',
+      '</Files>',
+      '',
+      '<IfModule dir_module>',
+      '    DirectoryIndex index.php index.html index.htm',
+      '</IfModule>',
+      '<IfModule mime_module>',
+      '    TypesConfig conf/mime.types',
+      '</IfModule>',
+      '',
+      'ErrorLog "logs/error.log"',
+      'LogLevel warn',
+      'LogFormat "%h %l %u %t \\"%r\\" %>s %b" common',
+      'LogFormat "%h %l %u %t \\"%r\\" %>s %b \\"%{Referer}i\\" '
+          '\\"%{User-Agent}i\\"" combined',
+      'CustomLog "logs/access.log" combined',
+      '',
+    ]);
+
+    if (Directory(p.join(etcDirectory, 'alias')).existsSync()) {
+      lines.add('IncludeOptional "$etcPath/alias/*.conf"');
+    }
+    if (File(p.join(etcDirectory, 'mod_php.conf')).existsSync()) {
+      lines.add('Include "$etcPath/mod_php.conf"');
+    }
+    if (Directory(p.join(etcDirectory, 'sites-enabled')).existsSync()) {
+      lines.add('IncludeOptional "$etcPath/sites-enabled/*.conf"');
+    }
+
+    final sslConfig = File(p.join(etcDirectory, 'httpd-ssl.conf'));
+    final sslModule =
+        available.contains('mod_ssl.so') &&
+        available.contains('mod_socache_shmcb.so');
+    final certificate = _firstExisting(p.join(_root, 'etc', 'ssl'), const [
+      'stackpilot.crt',
+      'laragon.crt',
+    ]);
+    final key = _firstExisting(p.join(_root, 'etc', 'ssl'), const [
+      'stackpilot.key',
+      'laragon.key',
+    ]);
+    final sslEnabled =
+        _isEnabled(layout.config.value('apache', 'SSLEnabled')) &&
+        certificate != null &&
+        key != null;
+
+    if (sslConfig.existsSync()) {
+      lines
+        ..add('')
+        ..add('Include "$etcPath/httpd-ssl.conf"');
+    } else if (sslEnabled && sslModule) {
+      lines.addAll([
+        '',
+        'Listen 443',
+        '<IfModule ssl_module>',
+        '    SSLRandomSeed startup builtin',
+        '    SSLRandomSeed connect builtin',
+        '    SSLSessionCache "shmcb:logs/ssl_scache(512000)"',
+        '    SSLSessionCacheTimeout 300',
+        '    SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1',
+        '    SSLCipherSuite HIGH:!aNULL:!MD5',
+        '</IfModule>',
+        '<VirtualHost *:443>',
+        '    ServerName localhost',
+        '    DocumentRoot "$documentRoot"',
+        '    SSLEngine on',
+        '    SSLCertificateFile "${_slash(certificate)}"',
+        '    SSLCertificateKeyFile "${_slash(key)}"',
+        '    <Directory "$documentRoot">',
+        '        Options Indexes FollowSymLinks',
+        '        AllowOverride All',
+        '        Require all granted',
+        '    </Directory>',
+        '</VirtualHost>',
+      ]);
+    }
+
+    lines.add('');
+
+    final contents = lines.join('\r\n');
+    if (contents != existing) {
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(contents);
+    }
+  }
+
+  /// Reads a boolean stack-marker value (`-1`, `1`, `on`, `true`, `yes`).
+  static bool _isEnabled(String? value) {
+    final normalized = value?.trim().toLowerCase();
+    return normalized == '-1' ||
+        normalized == '1' ||
+        normalized == 'on' ||
+        normalized == 'true' ||
+        normalized == 'yes';
+  }
+
+  /// First existing file in [directory] from [names], or null.
+  static String? _firstExisting(String directory, List<String> names) {
+    for (final name in names) {
+      final path = p.join(directory, name);
+      if (File(path).existsSync()) {
+        return path;
+      }
+    }
+    return null;
+  }
+
   /// Modules Laragon loads from Apache's stock `httpd.conf`.
   static const Set<String> _laragonApacheModules = {
     'access_compat_module',
@@ -876,15 +1131,31 @@ class StackEditor {
   ///
   /// A Laragon marker is only touched when it already carries a `Version` key,
   /// so an older install keeps its own shape. A StackPilot marker is ours, so
-  /// the key is added when missing.
+  /// the key is added when missing. Adopted stacks write both markers.
   void _writeMarkerVersion(StackComponent component, String version) {
-    final file = File(_markerPath);
+    _writeVersionTo(
+      File(_markerPath),
+      component,
+      version,
+      addWhenMissing: layout.flavor != StackFlavor.laragon,
+    );
+    for (final file in _markerTargets.skip(1)) {
+      _writeVersionTo(file, component, version, addWhenMissing: false);
+    }
+  }
+
+  void _writeVersionTo(
+    File file,
+    StackComponent component,
+    String version, {
+    required bool addWhenMissing,
+  }) {
     final source = _readText(file);
     if (source == null) {
       return;
     }
     final parsed = IniDocument.parse(source);
-    if (layout.flavor == StackFlavor.laragon &&
+    if (!addWhenMissing &&
         parsed.section(component.directoryName)?.value('Version') == null) {
       return;
     }
@@ -1169,14 +1440,19 @@ class StackEditor {
     return line.replaceFirstMapped(RegExp(r'"[^"]*"'), (_) => '"$value"');
   }
 
-  void _updateApacheDocumentRoot(String oldRoot, String newRoot) {
+  void _updateApacheDocumentRoot(
+    String oldRoot,
+    String newRoot, {
+    bool includeApacheConfig = true,
+  }) {
     final apache = layout.activeVersion(StackComponent.apache);
     if (apache == null) {
       return;
     }
 
     final files = [
-      File(p.join(apache.directory, 'conf', 'httpd.conf')),
+      if (includeApacheConfig)
+        File(p.join(apache.directory, 'conf', 'httpd.conf')),
       File(p.join(_root, 'etc', 'apache2', 'sites-enabled', '00-default.conf')),
     ];
 

@@ -56,6 +56,9 @@ DocumentRoot "C:/Apache24/htdocs"
     Require all granted
 </Directory>
 ''');
+        File(
+          p.join(directory, 'modules', 'mod_mpm_winnt.so'),
+        ).createSync(recursive: true);
       case StackComponent.php:
         File(p.join(directory, 'php8apache2_4.dll')).createSync();
         File(p.join(directory, 'libcrypto-3-x64.dll')).createSync();

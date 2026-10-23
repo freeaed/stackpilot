@@ -14,6 +14,10 @@ Windows executables.
   writes `usr/stackpilot.ini`, a default profile, and the `bin/`, `etc/`,
   `www/`, `data/`, and `logs/` folders, so nothing else has to be installed
   first. **Open existing stack…** opens a StackPilot folder or a Laragon one.
+  A Laragon folder can be **adopted in place**: StackPilot writes
+  `usr/stackpilot.ini` beside `usr/laragon.ini`, selects the versions Laragon
+  had active, and regenerates its own configs. Files are not copied or moved,
+  and Laragon can still open the folder.
 - **Set up this stack** – a new stack has no server binaries yet. The **Set up
   stack** button (or the banner on the services panel) opens a wizard that
   downloads the official builds for Apache, PHP, MariaDB, Mailpit, Nginx,
@@ -32,11 +36,12 @@ Windows executables.
   PostgreSQL, Apache, Nginx, Node.js, Redis, Memcached, or Mailpit card, then
   choose an installed version. StackPilot updates `usr/profile/default.ini` and
   the stack marker (`usr/stackpilot.ini`, or `usr/laragon.ini` on Laragon
-  stacks), plus `bin/laragon/laragon.cmd` PATH entries when that file exists,
-  Apache's `mod_php.conf`, the active `php.ini` extension directory, the MySQL
-  and PostgreSQL ports, and the PHP/Apache module DLL names. The menu lists
-  versions already present under `bin/php`, `bin/mysql`, etc., and offers
-  **Add version…** even when a component has no versions yet.
+  stacks), regenerates `bin/stackpilot.cmd` for its own stacks (Laragon stacks
+  keep `bin/laragon/laragon.cmd`), Apache's `mod_php.conf`, the active `php.ini`
+  extension directory, the MySQL and PostgreSQL ports, and the PHP/Apache
+  module DLL names. The menu lists versions already present under `bin/php`,
+  `bin/mysql`, etc., and offers **Add version…** even when a component has no
+  versions yet.
 - **Add versions** – import an extracted version folder, install from a local
   ZIP, or download and install from a URL. Use this when the version you want
   (for example PHP 8.1 or 8.4, or another MySQL release) is not in the menu yet.
@@ -48,6 +53,11 @@ Windows executables.
   it to open a terminal with the active PHP, Node.js, Apache, MySQL,
   PostgreSQL, Redis, Memcached, and Mailpit binaries already on `PATH`
   (`OPENSSL_CONF` is set too). It is regenerated whenever you switch versions.
+- **Apache config from a template** – StackPilot writes a complete `httpd.conf`
+  for its own stacks: `ServerRoot`, `Listen`, `ServerName`, the module set,
+  document root, log paths, vhost includes, and optional SSL. The Apache Lounge
+  original is kept next to it as `conf\httpd.conf.vendor`. Laragon stacks keep
+  their vendor config and are patched in place.
 - **Switch stacks at runtime** – use **Change stack** in the header to point the
   app at another stack folder. The version menus immediately reflect that
   stack's installed versions.
@@ -149,8 +159,9 @@ Where things live inside a stack:
 ## Roadmap
 
 `docs/ROADMAP.md` tracks the next stages. Stage 2 (independence from Laragon)
-is complete through self-provisioning; the next stage removes the remaining
-Laragon-specific details such as the launcher script and config patching.
+is complete: StackPilot owns its launcher, Apache config, hosts entries, ports,
+and can adopt an existing Laragon folder in place. Stage 3 covers packaging,
+updates, and release engineering.
 
 ## Branding
 
