@@ -337,8 +337,8 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                   labelText: 'Stacks folder',
                   border: OutlineInputBorder(),
                   helperText:
-                      'Parent folder that contains your Laragon stacks, for '
-                      'example C:\\ or D:\\dev\\stacks.',
+                      'Parent folder that contains your stacks, for example '
+                      'C:\\ or D:\\dev\\stacks.',
                 ),
               ),
             ),
@@ -373,8 +373,8 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
           const Padding(
             padding: EdgeInsets.symmetric(vertical: 12),
             child: Text(
-              'No Laragon stack was found in that folder. Each stack needs '
-              'usr\\laragon.ini and a bin folder.',
+              'No stack was found in that folder. Each stack needs '
+              'usr\\stackpilot.ini (or usr\\laragon.ini) and a bin folder.',
               style: TextStyle(fontSize: 12.5, color: Color(0xFF7A8880)),
             ),
           )
@@ -427,7 +427,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         ),
         const SizedBox(height: 8),
         const _Hint(
-          'Laragon uses this as the base folder for new data. Existing '
+          'The stack uses this as the base folder for service data. Existing '
           'databases and MySQL data are not moved.',
         ),
         SwitchListTile(
@@ -496,7 +496,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
           decoration: const InputDecoration(
             labelText: 'MySQL port',
             border: OutlineInputBorder(),
-            helperText: 'Written to laragon.ini and the active my.ini.',
+            helperText: 'Written to the stack configuration and my.ini.',
           ),
         ),
         const SizedBox(height: 16),
@@ -520,7 +520,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
           decoration: const InputDecoration(
             labelText: 'PostgreSQL port',
             border: OutlineInputBorder(),
-            helperText: 'Written to laragon.ini and the active postgresql.conf.',
+            helperText: 'Written to the stack configuration and postgresql.conf.',
           ),
         ),
         const SizedBox(height: 16),
@@ -533,7 +533,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         if (!layout.postgresqlInitialized)
           const _Hint(
             'This data folder is not initialized yet. Run initdb once or '
-            'start PostgreSQL from Laragon before StackPilot can start it.',
+            'start PostgreSQL from the stack before StackPilot can start it.',
           ),
         const _Hint(
           'Restart PostgreSQL after changing the port. Existing clients that '

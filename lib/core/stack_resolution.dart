@@ -1,9 +1,13 @@
 import 'app_preferences.dart';
+import 'stack_bootstrap.dart';
 import 'stack_catalog.dart';
 import 'stack_layout.dart';
 
-/// Stacks StackPilot looks for on a machine with no saved preference.
-const defaultStackCandidates = [r'C:\laragon-wamp', r'C:\laragon'];
+/// Well-known Laragon install locations.
+///
+/// These are only a last-resort fallback so an existing install still opens
+/// without configuration. StackPilot does not require Laragon.
+const legacyStackCandidates = [r'C:\laragon-wamp', r'C:\laragon'];
 
 /// The stack to open on startup plus the folder to report when none was found.
 class StartupStack {
@@ -18,11 +22,13 @@ class StartupStack {
 /// 1. an explicit `--stack-root` argument or environment variable,
 /// 2. the stack used last,
 /// 3. the first stack inside the saved stacks folder,
-/// 4. the well-known install locations.
+/// 4. the first stack inside StackPilot's own stacks folder,
+/// 5. the well-known Laragon install locations.
 StartupStack resolveStartupStack({
   String? requestedRoot,
   AppPreferences preferences = AppPreferences.empty,
-  List<String> fallbackCandidates = defaultStackCandidates,
+  List<String> fallbackCandidates = legacyStackCandidates,
+  String? defaultStacksFolder,
 }) {
   if (requestedRoot != null && requestedRoot.trim().isNotEmpty) {
     final root = requestedRoot.trim();
@@ -37,9 +43,13 @@ StartupStack resolveStartupStack({
     }
   }
 
-  final stacksFolder = preferences.stacksFolder;
-  if (stacksFolder != null) {
-    for (final root in StackCatalog.scan(stacksFolder)) {
+  final ownFolder = defaultStacksFolder ?? StackBootstrap.defaultStacksFolder();
+  final folders = <String>{
+    if (preferences.stacksFolder != null) preferences.stacksFolder!,
+    ownFolder,
+  };
+  for (final folder in folders) {
+    for (final root in StackCatalog.scan(folder)) {
       final layout = StackLayout.detect(root);
       if (layout != null) {
         return StartupStack(layout: layout, attemptedRoot: root);
@@ -56,6 +66,6 @@ StartupStack resolveStartupStack({
 
   return StartupStack(
     layout: null,
-    attemptedRoot: activeStack ?? stacksFolder ?? defaultStackCandidates.first,
+    attemptedRoot: activeStack ?? preferences.stacksFolder ?? ownFolder,
   );
 }

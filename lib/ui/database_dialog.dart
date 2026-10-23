@@ -234,7 +234,7 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
       const Text(
         'Start Apache and MySQL, then open phpMyAdmin. The generated config '
         'connects to 127.0.0.1 as root with no password, which matches a '
-        'default Laragon MySQL install.',
+        'default local MySQL install.',
         style: TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
       ),
     ];

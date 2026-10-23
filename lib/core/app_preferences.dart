@@ -3,7 +3,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
-/// Settings that belong to StackPilot rather than to one Laragon stack.
+/// Settings that belong to StackPilot rather than to one stack.
 ///
 /// They are stored outside the stack so they survive switching to a different
 /// stack folder.
@@ -16,7 +16,7 @@ class AppPreferences {
 
   static const empty = AppPreferences();
 
-  /// Folder that contains one or more Laragon stacks.
+  /// Folder that contains one or more stacks.
   final String? stacksFolder;
 
   /// Stack root that was used last.

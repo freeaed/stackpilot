@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:stackpilot/core/app_preferences.dart';
+import 'package:stackpilot/core/stack_layout.dart';
 import 'package:stackpilot/core/stack_resolution.dart';
 
 void main() {
@@ -69,10 +70,7 @@ void main() {
     createStack(sibling);
 
     final startup = resolveStartupStack(
-      preferences: AppPreferences(
-        stacksFolder: temp.path,
-        activeStack: root,
-      ),
+      preferences: AppPreferences(stacksFolder: temp.path, activeStack: root),
     );
 
     expect(startup.layout?.root, p.normalize(sibling));
@@ -82,10 +80,40 @@ void main() {
     final startup = resolveStartupStack(
       preferences: AppPreferences(activeStack: root),
       fallbackCandidates: const [],
+      defaultStacksFolder: p.join(temp.path, 'none'),
     );
 
     expect(startup.layout, isNull);
     expect(startup.attemptedRoot, root);
+  });
+
+  test('finds a StackPilot stack in the StackPilot stacks folder', () {
+    final ownFolder = p.join(temp.path, 'own');
+    final own = p.join(ownFolder, 'default');
+    File(p.join(own, 'usr', 'stackpilot.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+    Directory(p.join(own, 'bin')).createSync(recursive: true);
+
+    final startup = resolveStartupStack(
+      defaultStacksFolder: ownFolder,
+      fallbackCandidates: const [],
+    );
+
+    expect(startup.layout?.root, p.normalize(own));
+    expect(startup.layout?.flavor, StackFlavor.stackpilot);
+  });
+
+  test('reports the StackPilot stacks folder when nothing is found', () {
+    final ownFolder = p.join(temp.path, 'own');
+
+    final startup = resolveStartupStack(
+      fallbackCandidates: const [],
+      defaultStacksFolder: ownFolder,
+    );
+
+    expect(startup.layout, isNull);
+    expect(startup.attemptedRoot, ownFolder);
   });
 
   test('reports a requested root that is not a stack', () {

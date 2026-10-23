@@ -37,6 +37,8 @@ dependencies:
 
   # Pure-Dart path handling for Windows stack directories.
   path: ^1.9.1
+  # SHA-256 verification for component downloads.
+  crypto: ^3.0.6
   window_manager: ^0.5.2
   tray_manager: ^0.8.0
 

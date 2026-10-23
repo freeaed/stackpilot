@@ -78,6 +78,7 @@ void main() {
           'PHPIniDir "$root/bin/php/php-8.3.30-Win32-vs16-x64"\n',
     );
     createFile(r'etc\apache2\httpd-ssl.conf', 'Listen 443\n');
+    Directory(p.join(root, r'etc\apache2\alias')).createSync(recursive: true);
     createFile(
       r'etc\apache2\sites-enabled\00-default.conf',
       '<VirtualHost _default_:80>\n'
@@ -458,11 +459,34 @@ void main() {
     expect(httpd, contains('IncludeOptional "$etcPath/sites-enabled/*.conf"'));
     expect(httpd, contains('Include "$etcPath/httpd-ssl.conf"'));
     expect(httpd, contains('Include "$etcPath/mod_php.conf"'));
+    expect(httpd, contains('ServerName localhost'));
 
     StackEditor(layout).selectVersion(StackComponent.apache, install);
     expect(
       File(p.join(install.directory, 'conf', 'httpd.conf')).readAsStringSync(),
       httpd,
+    );
+  });
+
+  test('keeps a ServerName that the vendor config already sets', () async {
+    final source = Directory(p.join(temp.path, 'downloads', 'httpd-2.4.70'))
+      ..createSync(recursive: true);
+    File(p.join(source.path, 'bin', 'httpd.exe'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+    File(p.join(source.path, 'conf', 'httpd.conf'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('ServerRoot "C:/Apache24"\nServerName dev.test\n');
+
+    final install = await StackEditor(layout)
+        .importFolder(StackComponent.apache, source.path);
+    final httpd = File(p.join(install.directory, 'conf', 'httpd.conf'))
+        .readAsStringSync();
+
+    expect(httpd, contains('ServerName dev.test'));
+    expect(
+      RegExp(r'^ServerName', multiLine: true).allMatches(httpd),
+      hasLength(1),
     );
   });
 

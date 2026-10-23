@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../core/app_preferences.dart';
 import '../core/service_manager.dart';
 import '../core/site_inventory.dart';
+import '../core/stack_bootstrap.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
 import 'component_presentation.dart';
@@ -16,8 +17,10 @@ import 'settings_dialog.dart';
 import 'version_dialog.dart';
 import 'widgets/dashboard_chrome.dart';
 import 'widgets/dashboard_header.dart';
+import 'widgets/onboarding_view.dart';
 import 'widgets/projects_panel.dart';
 import 'widgets/services_panel.dart';
+import 'widgets/stack_setup_dialog.dart';
 import 'windows_dialogs.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -94,7 +97,7 @@ class _DashboardPageState extends State<DashboardPage> {
       return;
     }
 
-    final path = await pickFolder('Select a Laragon stack folder');
+    final path = await pickFolder('Select a stack folder');
     if (path == null || !mounted) {
       return;
     }
@@ -112,7 +115,8 @@ class _DashboardPageState extends State<DashboardPage> {
     final layout = StackLayout.detect(root);
     if (layout == null) {
       _showMessage(
-        'No Laragon stack found at $root. Expected usr/laragon.ini and bin/.',
+        'No stack found at $root. Expected usr\\stackpilot.ini (or '
+        'usr\\laragon.ini) and a bin folder.',
       );
       return;
     }
@@ -129,6 +133,69 @@ class _DashboardPageState extends State<DashboardPage> {
     if (mounted) {
       _showMessage('Using ${layout.root}');
     }
+  }
+
+  /// Creates a StackPilot stack at [root] and opens it.
+  ///
+  /// Returns an error message for the onboarding screen, or null on success.
+  Future<String?> _createStack(String root) async {
+    final StackLayout layout;
+    try {
+      layout = StackBootstrap.create(root: root);
+    } on StackBootstrapException catch (error) {
+      return error.message;
+    }
+
+    if (!mounted) {
+      return null;
+    }
+    setState(() {
+      _layout = layout;
+      _inventory = SiteInventory.load(layout);
+      _services = _createManager(layout);
+      _busy.clear();
+      _bulkBusy = false;
+    });
+    _rememberStack(layout);
+    await _refreshExternal();
+    if (mounted) {
+      _showMessage('Created a stack at ${layout.root}');
+    }
+    return null;
+  }
+
+  /// Lets the user open an existing stack folder from the onboarding screen.
+  ///
+  /// Returns an error message, or null when a stack was opened or the picker
+  /// was cancelled.
+  Future<String?> _openExistingStack() async {
+    final path = await pickFolder('Select a stack folder');
+    if (path == null || !mounted) {
+      return null;
+    }
+    if (_services?.hasRunningServices == true) {
+      return 'Stop all services before switching stacks.';
+    }
+
+    final layout = StackLayout.detect(path);
+    if (layout == null) {
+      return 'No stack found at $path. Expected usr\\stackpilot.ini (or '
+          'usr\\laragon.ini) and a bin folder.';
+    }
+
+    setState(() {
+      _layout = layout;
+      _inventory = SiteInventory.load(layout);
+      _services = _createManager(layout);
+      _busy.clear();
+      _bulkBusy = false;
+    });
+    _rememberStack(layout);
+    await _refreshExternal();
+    if (mounted) {
+      _showMessage('Using ${layout.root}');
+    }
+    return null;
   }
 
   void _rememberStack(StackLayout layout) {
@@ -179,9 +246,8 @@ class _DashboardPageState extends State<DashboardPage> {
     });
 
     if (layout == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('No Laragon-compatible stack found at $root.')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('No stack found at $root.')));
     }
   }
 
@@ -260,8 +326,37 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _addVersion(StackComponent component) async {
+  /// Opens the starter-stack dialog and refreshes the stack afterwards.
+  Future<void> _openSetup() async {
     final layout = _layout;
+    if (layout == null) {
+      return;
+    }
+
+    final result = await showStackSetupDialog(context, layout: layout);
+    if (result == null || !mounted) {
+      return;
+    }
+
+    if (result.changed) {
+      await _reloadAfterConfigChange();
+      if (!mounted) {
+        return;
+      }
+    }
+
+    if (result.failures.isNotEmpty) {
+      _showMessage(result.failures.join('\n'));
+    } else if (result.changed) {
+      _showMessage(
+        'Installed ${result.installed} '
+        '${result.installed == 1 ? 'component' : 'components'}. '
+        'Start them from their cards.',
+      );
+    }
+  }
+
+  Future<void> _addVersion(StackComponent component) async {    final layout = _layout;
     if (layout == null) {
       return;
     }
@@ -544,9 +639,11 @@ class _DashboardPageState extends State<DashboardPage> {
 
     return Scaffold(
       body: layout == null
-          ? MissingStackView(
+          ? OnboardingView(
               attemptedRoot: widget.attemptedRoot,
-              onRetry: _refresh,
+              defaultRoot: StackBootstrap.defaultRoot(),
+              onCreate: _createStack,
+              onOpenExisting: _openExistingStack,
             )
           : Column(
               children: [
@@ -578,6 +675,7 @@ class _DashboardPageState extends State<DashboardPage> {
                           onToggle: _toggleService,
                           onSelectVersion: _selectVersion,
                           onAddVersion: _addVersion,
+                          onSetupStack: _openSetup,
                         ),
                       ),
                       const VerticalDivider(width: 1),

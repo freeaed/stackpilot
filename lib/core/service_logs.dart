@@ -64,7 +64,7 @@ class ServiceLogTail {
   bool get exists => modified != null;
 }
 
-/// Finds the log files Laragon services write inside a stack.
+/// Finds the log files a stack's services write.
 ///
 /// Discovery only reads the file system. A service that has not run yet often
 /// has no log file, so callers should treat an empty result as normal.

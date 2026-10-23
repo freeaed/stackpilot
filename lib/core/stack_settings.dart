@@ -93,7 +93,7 @@ class PhpIniSettings {
   }
 }
 
-/// Mutable snapshot of the Laragon settings StackPilot can safely edit.
+/// Mutable snapshot of the stack settings StackPilot can safely edit.
 class StackSettings {
   const StackSettings({
     required this.documentRoot,

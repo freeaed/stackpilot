@@ -49,7 +49,7 @@ class ServiceCommand {
   final String workingDirectory;
 }
 
-/// Starts and stops services for a Laragon-compatible stack.
+/// Starts and stops services for a stack.
 ///
 /// Owned services are assigned to a Windows job so they exit with StackPilot.
 /// Services started elsewhere are adopted only after their executable path is
@@ -357,7 +357,7 @@ class ServiceManager {
           throw ServiceException(
             'PostgreSQL has no initialized data directory at '
             '${layout.postgresqlDataDirectory}. Run initdb once or start '
-            'PostgreSQL from Laragon first.',
+            'PostgreSQL from the stack first.',
           );
         }
         return ServiceCommand(

@@ -1,4 +1,4 @@
-/// Minimal INI reader/writer for Laragon-compatible configuration files.
+/// Minimal INI reader/writer for stack configuration files.
 ///
 /// Keys and section names are matched case-insensitively, values are kept
 /// verbatim (including Windows paths), and comments are ignored.

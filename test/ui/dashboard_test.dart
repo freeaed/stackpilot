@@ -13,6 +13,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:stackpilot/app.dart';
 import 'package:stackpilot/core/app_preferences.dart';
 import 'package:stackpilot/core/service_manager.dart';
+import 'package:stackpilot/core/stack_bootstrap.dart';
 import 'package:stackpilot/core/stack_layout.dart';
 import 'package:path/path.dart' as p;
 
@@ -421,16 +422,113 @@ Version=postgresql-x64-16
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('explains how to point at a stack when none is found', (
-    tester,
-  ) async {
+  testWidgets('offers to create a stack when none is found', (tester) async {
     await tester.pumpWidget(
       const StackPilotApp(layout: null, attemptedRoot: r'C:\missing-stack'),
     );
 
-    expect(find.text('Stack not found'), findsOneWidget);
-    expect(find.text(r'C:\missing-stack'), findsOneWidget);
-    expect(find.text('Retry'), findsOneWidget);
+    expect(find.text('Welcome to StackPilot'), findsOneWidget);
+    expect(find.text('Create stack'), findsOneWidget);
+    expect(find.text('Open existing stack…'), findsOneWidget);
+    expect(
+      find.text('No stack was found at C:\\missing-stack'),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('creates a StackPilot stack from the onboarding screen', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final target = p.join(temp.path, 'my-stack');
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: null,
+        attemptedRoot: r'C:\missing-stack',
+        serviceManagerFactory: _FakeServiceManager.new,
+      ),
+    );
+
+    await tester.enterText(find.byType(TextField), target);
+    await tester.tap(find.widgetWithText(FilledButton, 'Create stack'));
+    await tester.pumpAndSettle();
+
+    expect(StackLayout.isStackRoot(target), isTrue);
+    final marker = File(p.join(target, 'usr', 'stackpilot.ini'));
+    expect(marker.existsSync(), isTrue);
+    expect(
+      marker.readAsStringSync(),
+      contains('DocumentRootList=$target\\www'),
+    );
+    expect(find.text('Change stack'), findsOneWidget);
+    expect(find.text('Created a stack at $target'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('lets a fresh stack install its first version', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final target = p.join(temp.path, 'fresh');
+    final layout = StackBootstrap.create(root: target);
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: target,
+        serviceManagerFactory: _FakeServiceManager.new,
+      ),
+    );
+
+    expect(find.text('Not installed'), findsWidgets);
+    await tester.tap(find.byTooltip('Add a PHP version'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Add version…'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Add PHP version'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('offers to set up a fresh stack', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final target = p.join(temp.path, 'empty-stack');
+    final layout = StackBootstrap.create(root: target);
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: target,
+        serviceManagerFactory: _FakeServiceManager.new,
+      ),
+    );
+
+    expect(find.text('This stack has no components yet'), findsOneWidget);
+    expect(find.text('Install a starter stack'), findsOneWidget);
+
+    await tester.tap(find.text('Install a starter stack'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Set up this stack'), findsOneWidget);
+    expect(find.text('Install 4 components'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Set up this stack'), findsNothing);
+
+    await tester.pumpWidget(const SizedBox());
   });
 
   testWidgets('lists stacks in the settings folder and switches to one', (

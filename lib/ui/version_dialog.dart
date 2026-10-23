@@ -229,7 +229,7 @@ class _AddVersionDialogState extends State<_AddVersionDialog> {
                 _VersionSource.folder => _pathField(
                   controller: _folder,
                   label: 'Extracted version folder',
-                  hint: r'C:\laragon\bin\php\php-8.4.26-Win32-vs17-x64',
+                  hint: r'D:\stacks\default\bin\php\php-8.4.26-Win32-vs17-x64',
                   onBrowse: () async {
                     final path = await pickFolder(
                       'Select a ${widget.componentLabel} version folder',

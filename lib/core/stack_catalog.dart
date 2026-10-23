@@ -4,14 +4,14 @@ import 'package:path/path.dart' as p;
 
 import 'stack_layout.dart';
 
-/// Finds Laragon-compatible stacks inside a folder.
+/// Finds stacks inside a folder.
 class StackCatalog {
   const StackCatalog._();
 
   /// Returns stack roots directly inside [folder], sorted by name.
   ///
   /// When [folder] is itself a stack, it is returned on its own so a user who
-  /// points at `C:\laragon` instead of `C:\` still gets a usable result.
+  /// points at a stack root instead of its parent still gets a usable result.
   static List<String> scan(String folder) {
     final directory = Directory(folder);
     if (!directory.existsSync()) {

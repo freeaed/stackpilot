@@ -32,12 +32,10 @@ void main() {
     createFile(r'bin\postgresql\postgresql-x64-16\bin\postgres.exe');
     createFile(r'data\postgresql\PG_VERSION');
     createFile(r'data\postgresql\postgresql.conf');
-    File(p.join(root, 'data', 'postgresql', 'PG_VERSION')).writeAsStringSync(
-      '16',
-    );
-    File(
-      p.join(root, 'data', 'postgresql', 'postgresql.conf'),
-    ).writeAsStringSync('#port = 5432\n');
+    File(p.join(root, 'data', 'postgresql', 'PG_VERSION'))
+        .writeAsStringSync('16');
+    File(p.join(root, 'data', 'postgresql', 'postgresql.conf'))
+        .writeAsStringSync('#port = 5432\n');
     createFile(r'bin\php\php-8.3.30\php.exe');
     createFile(r'bin\php\php-8.5.11\php.exe');
     createFile(r'bin\nodejs\node-v22\node.exe');
@@ -166,10 +164,7 @@ Version=php-8.5.11
       layout.activeVersion(StackComponent.postgresql)?.version,
       'postgresql-x64-16',
     );
-    expect(
-      layout.postgresqlDataDirectory,
-      p.join(root, 'data', 'postgresql'),
-    );
+    expect(layout.postgresqlDataDirectory, p.join(root, 'data', 'postgresql'));
     expect(layout.postgresqlInitialized, isTrue);
     expect(layout.postgresqlPort, 5432);
   });
@@ -193,10 +188,7 @@ Version=php-8.5.11
     final layout = StackLayout.detect(root)!;
 
     expect(layout.postgresqlInitialized, isFalse);
-    expect(
-      layout.postgresqlDataDirectory,
-      p.join(root, 'data', 'postgresql'),
-    );
+    expect(layout.postgresqlDataDirectory, p.join(root, 'data', 'postgresql'));
   });
 
   test('leaves active versions unknown without a Laragon launcher', () {
@@ -208,5 +200,40 @@ Version=php-8.5.11
     expect(layout, isNotNull);
     expect(layout!.activeVersion(StackComponent.php), isNull);
     expect(layout.installedVersions(StackComponent.php), hasLength(2));
+  });
+
+  test('detects a StackPilot stack and its marker', () {
+    createFile(r'bin\php\php-8.4.26\php.exe');
+    File(p.join(root, 'usr', 'stackpilot.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('[apache]\nUse=1\n');
+
+    final layout = StackLayout.detect(root)!;
+
+    expect(layout.flavor, StackFlavor.stackpilot);
+    expect(layout.markerPath, p.join(root, 'usr', 'stackpilot.ini'));
+    expect(layout.serviceEnabled(StackComponent.apache), isTrue);
+  });
+
+  test('prefers the StackPilot marker when both markers exist', () {
+    createStack();
+    File(p.join(root, 'usr', 'stackpilot.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('[mysql]\nPort=3310\n');
+
+    final layout = StackLayout.detect(root)!;
+
+    expect(layout.flavor, StackFlavor.stackpilot);
+    expect(layout.mysqlPort, 3310);
+  });
+
+  test('requires a bin folder even when a marker exists', () {
+    File(p.join(root, 'usr', 'stackpilot.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('');
+
+    expect(StackLayout.flavorOf(root), StackFlavor.stackpilot);
+    expect(StackLayout.isStackRoot(root), isFalse);
+    expect(StackLayout.detect(root), isNull);
   });
 }

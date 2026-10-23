@@ -68,8 +68,12 @@ class SiteInventory {
       p.join(layout.root, 'etc', 'apache2', 'sites-enabled'),
     );
     final sslDirectory = p.join(layout.root, 'etc', 'ssl');
-    final certificate = p.join(sslDirectory, 'laragon.crt');
-    final key = p.join(sslDirectory, 'laragon.key');
+    final certificate =
+        _firstExisting(sslDirectory, const ['stackpilot.crt', 'laragon.crt']) ??
+        p.join(sslDirectory, 'stackpilot.crt');
+    final key =
+        _firstExisting(sslDirectory, const ['stackpilot.key', 'laragon.key']) ??
+        p.join(sslDirectory, 'stackpilot.key');
     final sslAvailable =
         File(certificate).existsSync() && File(key).existsSync();
     final sslRequested = _isEnabled(
@@ -235,6 +239,17 @@ String? _define(String text, String name) {
     caseSensitive: false,
   ).firstMatch(text);
   return match?.group(1);
+}
+
+/// Returns the first file in [directory] that exists under one of [names].
+String? _firstExisting(String directory, List<String> names) {
+  for (final name in names) {
+    final path = p.join(directory, name);
+    if (File(path).existsSync()) {
+      return path;
+    }
+  }
+  return null;
 }
 
 List<String> _readHosts(String path) {

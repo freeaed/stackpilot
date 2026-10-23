@@ -16,6 +16,7 @@ class ServicesPanel extends StatelessWidget {
     required this.onToggle,
     required this.onSelectVersion,
     required this.onAddVersion,
+    this.onSetupStack,
   });
 
   final StackLayout layout;
@@ -27,9 +28,15 @@ class ServicesPanel extends StatelessWidget {
   onSelectVersion;
   final void Function(StackComponent component) onAddVersion;
 
+  /// Opens the starter-stack setup dialog. Null hides the setup controls.
+  final VoidCallback? onSetupStack;
+
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
+    final noComponents = StackComponent.values.every(
+      (component) => layout.installedVersions(component).isEmpty,
+    );
 
     return ListView(
       padding: const EdgeInsets.all(20),
@@ -46,10 +53,25 @@ class ServicesPanel extends StatelessWidget {
                 ),
               ),
             ),
+            if (onSetupStack != null) ...[
+              const SizedBox(width: 8),
+              TextButton.icon(
+                onPressed: onSetupStack,
+                icon: const Icon(Icons.download, size: 16),
+                label: const Text('Set up stack'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
             const SizedBox(width: 8),
             const _MutedChip(label: 'Click version to switch'),
           ],
         ),
+        if (noComponents && onSetupStack != null) ...[
+          const SizedBox(height: 14),
+          _SetupBanner(onSetup: onSetupStack!),
+        ],
         const SizedBox(height: 14),
         Text(
           'Runtimes',
@@ -205,7 +227,8 @@ class _ServiceCard extends StatelessWidget {
                             : 'Stop ${componentLabels[component]}'
                       : configured
                       ? 'Start ${componentLabels[component]}'
-                      : 'Enable ${componentLabels[component]} in laragon.ini first',
+                      : 'Enable ${componentLabels[component]} in the stack '
+                            'settings first',
                   child: Switch(
                     value: running,
                     onChanged: canToggle
@@ -223,97 +246,90 @@ class _ServiceCard extends StatelessWidget {
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
           ),
           const SizedBox(height: 3),
-          if (installed.isEmpty)
-            Text(
-              versionLabel,
-              style: const TextStyle(fontSize: 12.5, color: Color(0xFF44534B)),
-            )
-          else
-            PopupMenuButton<Object>(
-              tooltip: 'Change ${componentLabels[component]} version',
-              padding: EdgeInsets.zero,
-              position: PopupMenuPosition.under,
-              onSelected: (value) {
-                if (value == _VersionMenuAction.add) {
-                  onAddVersion?.call(component);
-                } else if (value is StackInstall) {
-                  onSelectVersion?.call(component, value);
-                }
-              },
-              itemBuilder: (context) => [
-                for (final install in installed)
-                  CheckedPopupMenuItem<Object>(
-                    value: install,
-                    checked:
-                        active != null &&
-                        install.directory.toLowerCase() ==
-                            active.directory.toLowerCase(),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(install.displayVersion),
-                        Text(
-                          install.version,
-                          style: const TextStyle(
-                            fontSize: 10.5,
-                            color: Color(0xFF7A8880),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                const PopupMenuDivider(),
-                const PopupMenuItem<Object>(
-                  value: _VersionMenuAction.add,
-                  child: Row(
+          PopupMenuButton<Object>(
+            tooltip: installed.isEmpty
+                ? 'Add a ${componentLabels[component]} version'
+                : 'Change ${componentLabels[component]} version',
+            padding: EdgeInsets.zero,
+            position: PopupMenuPosition.under,
+            onSelected: (value) {
+              if (value == _VersionMenuAction.add) {
+                onAddVersion?.call(component);
+              } else if (value is StackInstall) {
+                onSelectVersion?.call(component, value);
+              }
+            },
+            itemBuilder: (context) => [
+              for (final install in installed)
+                CheckedPopupMenuItem<Object>(
+                  value: install,
+                  checked:
+                      active != null &&
+                      install.directory.toLowerCase() ==
+                          active.directory.toLowerCase(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.add, size: 17),
-                      SizedBox(width: 8),
-                      Text('Add version…'),
+                      Text(install.displayVersion),
+                      Text(
+                        install.version,
+                        style: const TextStyle(
+                          fontSize: 10.5,
+                          color: Color(0xFF7A8880),
+                        ),
+                      ),
                     ],
                   ),
                 ),
-              ],
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF1F7F3),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: const Color(0xFFCFE0D6)),
-                ),
+              if (installed.isNotEmpty) const PopupMenuDivider(),
+              const PopupMenuItem<Object>(
+                value: _VersionMenuAction.add,
                 child: Row(
                   children: [
-                    const Text(
-                      'Version',
-                      style: TextStyle(
-                        fontSize: 10.5,
-                        color: Color(0xFF6B7C73),
-                      ),
-                    ),
-                    const SizedBox(width: 7),
-                    Expanded(
-                      child: Text(
-                        versionLabel,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 12.5,
-                          color: Color(0xFF2F4238),
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    const Icon(
-                      Icons.keyboard_arrow_down_rounded,
-                      size: 18,
-                      color: Color(0xFF52605A),
-                    ),
+                    Icon(Icons.add, size: 17),
+                    SizedBox(width: 8),
+                    Text('Add version…'),
                   ],
                 ),
               ),
+            ],
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF1F7F3),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFCFE0D6)),
+              ),
+              child: Row(
+                children: [
+                  const Text(
+                    'Version',
+                    style: TextStyle(fontSize: 10.5, color: Color(0xFF6B7C73)),
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      versionLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12.5,
+                        color: Color(0xFF2F4238),
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.keyboard_arrow_down_rounded,
+                    size: 18,
+                    color: Color(0xFF52605A),
+                  ),
+                ],
+              ),
             ),
+          ),
           const SizedBox(height: 2),
           if (installed.isEmpty)
             Align(
@@ -401,3 +417,57 @@ class _MutedChip extends StatelessWidget {
     );
   }
 }
+
+class _SetupBanner extends StatelessWidget {
+  const _SetupBanner({required this.onSetup});
+
+  final VoidCallback onSetup;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF1F7F3),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFCFE0D6)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.rocket_launch_outlined,
+            size: 26,
+            color: Color(0xFF0E7A4A),
+          ),
+          const SizedBox(width: 14),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'This stack has no components yet',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  'Install PHP, Apache, MariaDB, and Mailpit from official '
+                  'builds, configured for this stack only.',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF52605A)),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          FilledButton.icon(
+            onPressed: onSetup,
+            icon: const Icon(Icons.download, size: 17),
+            label: const Text('Install a starter stack'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

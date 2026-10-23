@@ -16,7 +16,7 @@ class StackEditException implements Exception {
   String toString() => message;
 }
 
-/// Writes the small set of Laragon files involved in changing a version or a
+/// Writes the small set of stack files involved in changing a version or a
 /// setting. Every existing file is backed up once as `<name>.stackpilot.bak`.
 class StackEditor {
   StackEditor(this.layout);
@@ -27,11 +27,11 @@ class StackEditor {
   final StackLayout layout;
 
   String get _root => layout.root;
-  String get _laragonIniPath => p.join(_root, 'usr', 'laragon.ini');
+  String get _markerPath => layout.markerPath;
   String get _profilePath => p.join(_root, 'usr', 'profile', 'default.ini');
   String get _launcherPath => p.join(_root, 'bin', 'laragon', 'laragon.cmd');
 
-  /// Selects an installed version everywhere Laragon reads it from.
+  /// Selects an installed version everywhere the stack reads it from.
   void selectVersion(StackComponent component, StackInstall install) {
     if (install.component != component) {
       throw const StackEditException(
@@ -48,7 +48,7 @@ class StackEditor {
 
     _ensureVersionConfig(component, install);
     _writeProfileVersion(component, install.version);
-    _writeLaragonVersion(component, install.version);
+    _writeMarkerVersion(component, install.version);
     _updateLauncher(component, install);
 
     if (component == StackComponent.php) {
@@ -113,7 +113,7 @@ class StackEditor {
       p.join(
         Directory.systemTemp.path,
         'stackpilot-${DateTime.now().microsecondsSinceEpoch}-'
-            '${name.isEmpty ? 'phpmyadmin.zip' : name}',
+        '${name.isEmpty ? 'phpmyadmin.zip' : name}',
       ),
     );
     try {
@@ -200,10 +200,15 @@ class StackEditor {
   }
 
   /// Extracts a ZIP archive and moves the version folder into the stack.
+  ///
+  /// [preferredName] names the folder when the archive has no single top-level
+  /// folder. [installName] forces the folder name even when the archive ships
+  /// one, which keeps catalog installs at `bin/<component>/<version>`.
   Future<StackInstall> installArchive(
     StackComponent component,
     String archivePath, {
     String? preferredName,
+    String? installName,
   }) async {
     final archive = File(archivePath);
     if (!archive.existsSync()) {
@@ -225,10 +230,14 @@ class StackEditor {
         );
       }
 
-      final fallback = preferredName?.trim().isNotEmpty == true
+      final override = installName?.trim();
+      final fallback = (override != null && override.isNotEmpty)
+          ? override
+          : preferredName?.trim().isNotEmpty == true
           ? preferredName!.trim()
           : p.basenameWithoutExtension(archive.path);
-      final name = p.equals(source.path, extracted.path)
+      final name = (override != null && override.isNotEmpty) ||
+              p.equals(source.path, extracted.path)
           ? fallback
           : p.basename(source.path);
       return await _installDirectory(component, source, name, move: true);
@@ -242,6 +251,7 @@ class StackEditor {
     StackComponent component,
     String url, {
     void Function(int received, int? total)? onProgress,
+    String? installName,
   }) async {
     final uri = Uri.tryParse(url.trim());
     if (uri == null ||
@@ -261,7 +271,12 @@ class StackEditor {
       final name = uri.pathSegments.isEmpty
           ? null
           : p.basenameWithoutExtension(uri.pathSegments.last);
-      return await installArchive(component, archive.path, preferredName: name);
+      return await installArchive(
+        component,
+        archive.path,
+        preferredName: name,
+        installName: installName,
+      );
     } finally {
       _deleteQuietly(temporary);
     }
@@ -286,7 +301,7 @@ class StackEditor {
       );
     }
 
-    final iniFile = File(_laragonIniPath);
+    final iniFile = File(_markerPath);
     final source = _readText(iniFile) ?? '';
     final editor = IniEditor.parse(source)
       ..setValue('preferences', 'DataDir', dataDirectory)
@@ -330,6 +345,98 @@ class StackEditor {
     _applyPhpSettings(settings.php);
   }
 
+  /// Turns a service on or off in the stack marker.
+  ///
+  /// Provisioning uses this after a component is installed so the service can
+  /// be started without opening the settings dialog first.
+  void setServiceEnabled(StackComponent component, bool enabled) {
+    final file = File(_markerPath);
+    final source = _readText(file);
+    if (source == null) {
+      return;
+    }
+    final editor = IniEditor.parse(source)
+      ..setValue(component.directoryName, 'Use', enabled ? '-1' : '0');
+    _writeWithBackup(file, editor.serialize());
+  }
+
+  /// Re-applies the stack paths to the active Apache config.
+  ///
+  /// Provisioning calls this after `mod_php.conf` is created, so an Apache
+  /// version installed before PHP still gains the include.
+  void refreshApacheConfig() {
+    final current = StackLayout.detect(_root);
+    if (current == null) {
+      return;
+    }
+    final apache = current.activeVersion(StackComponent.apache);
+    if (apache == null) {
+      return;
+    }
+    StackEditor(current)._prepareApacheConfig(apache);
+  }
+
+  /// Rewrites [install]'s Apache config for this stack.
+  ///
+  /// Provisioning calls this after an Apache archive is unpacked, so the
+  /// config points at this stack even when the version is not active yet.
+  void prepareApacheConfig(StackInstall install) {
+    if (install.component != StackComponent.apache) {
+      throw const StackEditException('That version is not Apache.');
+    }
+    _prepareApacheConfig(install);
+  }
+
+  /// Creates the PHP config files this stack needs for [install].
+  void preparePhp(StackInstall install) {
+    if (install.component != StackComponent.php) {
+      throw const StackEditException('That version is not PHP.');
+    }
+    _ensurePhpIni(install);
+    _ensurePhpExtensionDir(install);
+    preparePhpModule(install);
+  }
+
+  /// Writes `etc/apache2/mod_php.conf` when it is missing and points it at
+  /// [install].
+  ///
+  /// Apache's config includes this file, so creating it is what makes a
+  /// downloaded PHP version serve `.php` files.
+  void preparePhpModule(StackInstall install) {
+    if (install.component != StackComponent.php) {
+      throw const StackEditException(
+        'The Apache PHP module needs a PHP version.',
+      );
+    }
+
+    final file = File(p.join(_root, 'etc', 'apache2', 'mod_php.conf'));
+    if (!file.existsSync()) {
+      final directory = _slash(install.directory);
+      final crypto =
+          _findDll(install.directory, 'libcrypto') ?? 'libcrypto-3-x64.dll';
+      final ssl = _findDll(install.directory, 'libssl') ?? 'libssl-3-x64.dll';
+      final module =
+          _findPhpApacheModule(install.directory) ?? 'php8apache2_4.dll';
+      _writeWithBackup(
+        file,
+        [
+          '# PHP for Apache, generated by StackPilot.',
+          'LoadFile "$directory/$crypto"',
+          'LoadFile "$directory/$ssl"',
+          'LoadModule php_module "$directory/$module"',
+          '<IfModule php_module>',
+          '    PHPIniDir "$directory"',
+          '    DirectoryIndex index.php index.html',
+          '    AddType application/x-httpd-php .php',
+          '    AddType application/x-httpd-php-source .phps',
+          '</IfModule>',
+          '',
+        ].join('\r\n'),
+      );
+    }
+    _updateApachePhp(install);
+  }
+
   Future<StackInstall> _installDirectory(
     StackComponent component,
     Directory source,
@@ -351,7 +458,16 @@ class StackEditor {
     }
 
     final targetRoot = Directory(p.join(_root, 'bin', component.directoryName));
-    final target = Directory(p.join(targetRoot.path, name));
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty ||
+        trimmedName == '.' ||
+        trimmedName == '..' ||
+        RegExp(r'[\\/:*?"<>|]').hasMatch(trimmedName)) {
+      throw StackEditException(
+        '"$name" is not a valid ${component.directoryName} folder name.',
+      );
+    }
+    final target = Directory(p.join(targetRoot.path, trimmedName));
     if (p.equals(p.normalize(source.path), p.normalize(target.path))) {
       throw StackEditException(
         '${component.directoryName} $name is already installed.',
@@ -384,7 +500,7 @@ class StackEditor {
 
     final install = StackInstall(
       component: component,
-      version: name,
+      version: trimmedName,
       directory: target.path,
       executablePath: StackLayout.executablePath(component, target.path),
     );
@@ -589,6 +705,11 @@ class StackEditor {
       r'^[ \t]*ScriptAlias[ \t]+/cgi-bin/',
       caseSensitive: false,
     );
+    final serverNamePattern = RegExp(
+      r'^[ \t]*ServerName[ \t]',
+      caseSensitive: false,
+    );
+    final hasServerName = lines.any(serverNamePattern.hasMatch);
     final directoryPattern = RegExp(
       r'^([ \t]*<Directory[ \t]+)"([^"]*)"(.*)$',
       caseSensitive: false,
@@ -643,8 +764,17 @@ class StackEditor {
       updated.removeLast();
     }
 
-    updated.add('IncludeOptional "$etcPath/alias/*.conf"');
-    updated.add('IncludeOptional "$etcPath/sites-enabled/*.conf"');
+    // Apache cannot determine its own host name on Windows and warns
+    // (AH00558) on every start; a plain ServerName keeps the log clean.
+    if (!hasServerName) {
+      updated.add('ServerName localhost');
+    }
+    if (Directory(p.join(etcDirectory, 'alias')).existsSync()) {
+      updated.add('IncludeOptional "$etcPath/alias/*.conf"');
+    }
+    if (Directory(p.join(etcDirectory, 'sites-enabled')).existsSync()) {
+      updated.add('IncludeOptional "$etcPath/sites-enabled/*.conf"');
+    }
     if (File(p.join(etcDirectory, 'httpd-ssl.conf')).existsSync()) {
       updated.add('Include "$etcPath/httpd-ssl.conf"');
     }
@@ -742,14 +872,20 @@ class StackEditor {
     _writeWithBackup(file, editor.serialize());
   }
 
-  void _writeLaragonVersion(StackComponent component, String version) {
-    final file = File(_laragonIniPath);
+  /// Updates the version in the stack marker.
+  ///
+  /// A Laragon marker is only touched when it already carries a `Version` key,
+  /// so an older install keeps its own shape. A StackPilot marker is ours, so
+  /// the key is added when missing.
+  void _writeMarkerVersion(StackComponent component, String version) {
+    final file = File(_markerPath);
     final source = _readText(file);
     if (source == null) {
       return;
     }
     final parsed = IniDocument.parse(source);
-    if (parsed.section(component.directoryName)?.value('Version') == null) {
+    if (layout.flavor == StackFlavor.laragon &&
+        parsed.section(component.directoryName)?.value('Version') == null) {
       return;
     }
     final editor = IniEditor.parse(source)

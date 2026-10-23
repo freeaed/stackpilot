@@ -4,6 +4,22 @@ import 'package:path/path.dart' as p;
 
 import 'ini.dart';
 
+/// Which tool created the stack on disk.
+///
+/// StackPilot writes [stackpilot] stacks itself; [laragon] stacks are opened as
+/// a courtesy so an existing install can be adopted without reinstalling.
+enum StackFlavor {
+  stackpilot('StackPilot', 'stackpilot.ini'),
+  laragon('Laragon', 'laragon.ini');
+
+  const StackFlavor(this.label, this.markerFileName);
+
+  final String label;
+
+  /// Configuration file inside `usr/` that marks the stack.
+  final String markerFileName;
+}
+
 /// A service/tool directory that StackPilot can detect inside a stack.
 enum StackComponent {
   apache('apache'),
@@ -37,8 +53,8 @@ class StackInstall {
 
   /// A short label such as `8.3.30` for menus and cards.
   ///
-  /// The full directory name stays available as [version] and is used for
-  /// writing Laragon's configuration.
+  /// The full directory name stays available as [version] and is written to the
+  /// stack's configuration file.
   String get displayVersion {
     final dotted = RegExp(r'\d+(?:\.\d+)+').firstMatch(version);
     if (dotted != null) {
@@ -52,12 +68,15 @@ class StackInstall {
   String toString() => '${component.directoryName} $version';
 }
 
-/// Read-only view of a Laragon-compatible stack directory.
+/// Read-only view of a stack directory, either StackPilot's own or one that
+/// follows Laragon's `bin/`, `usr/`, `etc/`, `www/` conventions.
 ///
 /// Detection only reads files. It never starts services or writes config.
 class StackLayout {
   StackLayout._({
     required this.root,
+    required this.flavor,
+    required this.markerPath,
     required this.config,
     required Map<StackComponent, List<StackInstall>> installed,
     required Map<StackComponent, StackInstall?> active,
@@ -94,24 +113,44 @@ class StackLayout {
   };
 
   final String root;
+
+  /// Which tool created this stack.
+  final StackFlavor flavor;
+
+  /// Absolute path of the configuration file that identifies the stack.
+  final String markerPath;
+
   final IniDocument config;
   final Map<StackComponent, List<StackInstall>> _installed;
   final Map<StackComponent, StackInstall?> _active;
 
-  /// True when [root] contains the files that identify a Laragon stack.
+  /// Returns the flavor whose marker file exists in [root], if any.
+  static StackFlavor? flavorOf(String root) {
+    final resolved = _normalizeRoot(root);
+    for (final flavor in StackFlavor.values) {
+      if (File(p.join(resolved, 'usr', flavor.markerFileName)).existsSync()) {
+        return flavor;
+      }
+    }
+    return null;
+  }
+
+  /// True when [root] contains a stack marker and a `bin/` folder.
   static bool isStackRoot(String root) {
     final resolved = _normalizeRoot(root);
-    return File(p.join(resolved, 'usr', 'laragon.ini')).existsSync() &&
+    return flavorOf(resolved) != null &&
         Directory(p.join(resolved, 'bin')).existsSync();
   }
 
-  /// Returns a layout when [root] contains `usr/laragon.ini` and `bin/`.
+  /// Returns a layout when [root] is a StackPilot or Laragon stack.
   static StackLayout? detect(String root) {
     final resolved = _normalizeRoot(root);
-    if (!isStackRoot(resolved)) {
+    final flavor = flavorOf(resolved);
+    if (flavor == null || !Directory(p.join(resolved, 'bin')).existsSync()) {
       return null;
     }
-    final configFile = File(p.join(resolved, 'usr', 'laragon.ini'));
+    final markerPath = p.join(resolved, 'usr', flavor.markerFileName);
+    final configFile = File(markerPath);
 
     final IniDocument config;
     try {
@@ -127,9 +166,11 @@ class StackLayout {
 
     return StackLayout._(
       root: resolved,
+      flavor: flavor,
+      markerPath: markerPath,
       config: config,
       installed: installed,
-      active: _readActive(resolved, installed, config),
+      active: _readActive(resolved, flavor, installed, config),
     );
   }
 
@@ -198,7 +239,8 @@ class StackLayout {
   bool get postgresqlInitialized =>
       File(p.join(postgresqlDataDirectory, 'PG_VERSION')).existsSync();
 
-  int get postgresqlPort {    final configured = int.tryParse(
+  int get postgresqlPort {
+    final configured = int.tryParse(
       config.value('postgresql', 'Port')?.trim() ?? '',
     );
     if (configured != null) {
@@ -292,6 +334,7 @@ class StackLayout {
 
   static Map<StackComponent, StackInstall?> _readActive(
     String root,
+    StackFlavor flavor,
     Map<StackComponent, List<StackInstall>> installed,
     IniDocument config,
   ) {
@@ -301,12 +344,14 @@ class StackLayout {
 
     _readProfile(root, installed, active);
     _readConfigVersions(config, installed, active);
-    _readLauncherPath(root, installed, active);
+    if (flavor == StackFlavor.laragon) {
+      _readLauncherPath(root, installed, active);
+    }
     return active;
   }
 
-  /// Older Laragon releases keep the selected version in `usr/laragon.ini`
-  /// rather than `usr/profile/default.ini`.
+  /// Older Laragon releases keep the selected version in the stack marker
+  /// rather than in `usr/profile/default.ini`.
   static void _readConfigVersions(
     IniDocument config,
     Map<StackComponent, List<StackInstall>> installed,
