@@ -19,6 +19,7 @@ migrate_working_dir/
 *.pfx
 *.p12
 *.key
+*.pem
 
 # IntelliJ related
 *.iml
