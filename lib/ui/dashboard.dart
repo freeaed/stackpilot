@@ -497,31 +497,80 @@ class _DashboardPageState extends State<DashboardPage> {
 
   Future<void> _generateVhosts() async {
     final inventory = _inventory;
-    if (inventory == null || inventory.missingConfigs.isEmpty) {
+    if (inventory == null) {
       return;
     }
     final missing = inventory.missingConfigs;
+    final unmapped = inventory.unmappedHosts;
+    if (missing.isEmpty && unmapped.isEmpty) {
+      return;
+    }
+
+    // Mapping a host needs administrator rights, so it is opt-in when configs
+    // are being created. When only hosts entries are missing, that is the
+    // whole point of the action.
+    var mapHosts = missing.isEmpty && unmapped.isNotEmpty;
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Generate virtual hosts?'),
-        content: Text(
-          'Create ${missing.length} config '
-          '${missing.length == 1 ? 'file' : 'files'} in '
-          '${inventory.sitesEnabledDirectory}:\n\n'
-          '${missing.map((site) => site.host).join('\n')}\n\n'
-          'Existing config files and hosts entries are left unchanged.',
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Generate virtual hosts?'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (missing.isNotEmpty) ...[
+                  Text(
+                    'Create ${missing.length} config '
+                    '${missing.length == 1 ? 'file' : 'files'} in '
+                    '${inventory.sitesEnabledDirectory}:',
+                  ),
+                  const SizedBox(height: 6),
+                  SelectableText(
+                    missing.map((site) => site.host).join('\n'),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ],
+                if (unmapped.isNotEmpty) ...[
+                  if (missing.isNotEmpty) const SizedBox(height: 16),
+                  Text(
+                    '${unmapped.length} host '
+                    '${unmapped.length == 1 ? 'is' : 'are'} not mapped in '
+                    '${inventory.hostsPath}.',
+                  ),
+                  CheckboxListTile(
+                    value: mapHosts,
+                    onChanged: (value) =>
+                        setDialogState(() => mapHosts = value ?? false),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('Add hosts entries'),
+                    subtitle: const Text(
+                      'Writes 127.0.0.1 lines. Windows may ask for '
+                      'administrator rights.',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                const Text(
+                  'Existing config files and unrelated hosts lines are left '
+                  'unchanged.',
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Generate'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Generate'),
-          ),
-        ],
       ),
     );
     if (confirmed != true || !mounted) {
@@ -529,20 +578,75 @@ class _DashboardPageState extends State<DashboardPage> {
     }
 
     try {
-      final result = inventory.generateMissing();
+      final result = inventory.generateMissing(mapHosts: mapHosts);
+      if (!mounted) {
+        return;
+      }
       setState(() {
         _inventory = SiteInventory.load(inventory.layout);
       });
-      _showMessage(
-        result.changed
-            ? 'Created ${result.created.length} virtual host '
-                  '${result.created.length == 1 ? 'file' : 'files'}. '
-                  'Restart Apache to apply.'
-            : 'Virtual hosts are already up to date.',
-      );
+
+      final parts = <String>[];
+      if (result.created.isNotEmpty) {
+        parts.add(
+          'Created ${result.created.length} virtual host '
+          '${result.created.length == 1 ? 'file' : 'files'}.',
+        );
+      }
+      if (result.mappedHosts.isNotEmpty) {
+        parts.add(
+          'Mapped ${result.mappedHosts.length} '
+          '${result.mappedHosts.length == 1 ? 'host' : 'hosts'}.',
+        );
+      }
+      if (result.changed) {
+        parts.add('Restart Apache to apply.');
+      }
+      if (result.hostsError != null) {
+        await _showHostsHelp(
+          'The virtual-host configs were written, but ${inventory.hostsPath} '
+          'could not be updated: ${result.hostsError}',
+          unmapped.map((site) => '127.0.0.1 ${site.host}').toList(),
+        );
+      } else {
+        _showMessage(
+          parts.isEmpty
+              ? 'Virtual hosts are already up to date.'
+              : parts.join(' '),
+        );
+      }
     } on FileSystemException catch (error) {
       _showMessage('Could not write virtual hosts: ${error.message}');
     }
+  }
+
+  Future<void> _showHostsHelp(String message, List<String> lines) {
+    return showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Hosts file not updated'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(message),
+            const SizedBox(height: 12),
+            const Text('Add these lines as an administrator:'),
+            const SizedBox(height: 6),
+            SelectableText(
+              lines.join('\n'),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openPath(String path) async {
@@ -687,7 +791,10 @@ class _DashboardPageState extends State<DashboardPage> {
                           onOpenPath: _openPath,
                           onOpenUrl: _openUrl,
                           onGenerate:
-                              (_inventory?.missingConfigs.isNotEmpty ?? false)
+                              ((_inventory?.missingConfigs.isNotEmpty ??
+                                          false) ||
+                                      (_inventory?.unmappedHosts.isNotEmpty ??
+                                          false))
                               ? _generateVhosts
                               : null,
                         ),

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'service_processes.dart';
+import 'port_check.dart' as ports;
 import 'stack_layout.dart';
 import 'windows_job.dart';
 
@@ -62,13 +63,15 @@ class ServiceManager {
     KillProcessTree? killProcessTree,
     ProcessInspector? inspector,
     AdoptProcess? adoptProcess,
+    ports.PortProbe? isPortFree,
     this.stopTimeout = const Duration(seconds: 8),
   }) : _layout = layout,
        _startProcess = startProcess ?? _defaultStart,
        _runProcess = runProcess ?? _defaultRun,
        _killProcessTree = killProcessTree ?? _defaultKillTree,
        _inspector = inspector ?? const WindowsProcessInspector(),
-       _adoptProcess = adoptProcess ?? _defaultAdopt;
+       _adoptProcess = adoptProcess ?? _defaultAdopt,
+       _isPortFree = isPortFree ?? ports.isPortFree;
 
   static const _startOrder = [
     StackComponent.apache,
@@ -98,6 +101,7 @@ class ServiceManager {
   final KillProcessTree _killProcessTree;
   final ProcessInspector _inspector;
   final AdoptProcess _adoptProcess;
+  final ports.PortProbe _isPortFree;
 
   StackLayout _layout;
   final Map<StackComponent, _OwnedService> _owned = {};
@@ -174,6 +178,15 @@ class ServiceManager {
       throw ServiceException(
         'No active ${_labels[component]} version is selected in '
         'usr/profile/default.ini.',
+      );
+    }
+
+    final port = _portFor(component, install);
+    if (port != null && !await _isPortFree(port)) {
+      throw ServiceException(
+        '${_labels[component]} cannot start because port $port is already '
+        'in use by another program. Stop it and try again, or choose a '
+        'different port in Settings.',
       );
     }
 
@@ -328,6 +341,50 @@ class ServiceManager {
       return true;
     } on TimeoutException {
       return false;
+    }
+  }
+
+  /// Port the component listens on, or null when it does not use one.
+  int? _portFor(StackComponent component, StackInstall install) {
+    switch (component) {
+      case StackComponent.apache:
+        return _listenPort(
+              File(p.join(install.directory, 'conf', 'httpd.conf')),
+            ) ??
+            80;
+      case StackComponent.nginx:
+        return _listenPort(
+              File(p.join(install.directory, 'conf', 'nginx.conf')),
+            ) ??
+            80;
+      case StackComponent.mysql:
+        return layout.mysqlPort;
+      case StackComponent.postgresql:
+        return layout.postgresqlPort;
+      case StackComponent.redis:
+        return layout.redisPort;
+      case StackComponent.mailpit:
+        return layout.mailpitPort;
+      case StackComponent.memcached:
+      case StackComponent.php:
+      case StackComponent.nodejs:
+        return null;
+    }
+  }
+
+  /// First `Listen`/`listen` port in a server config, when it can be read.
+  static int? _listenPort(File file) {
+    try {
+      if (!file.existsSync()) {
+        return null;
+      }
+      final match = RegExp(
+        r'^[ \t]*[Ll]isten[ \t]+(?:[^:\s\r\n]+:)?(\d+)',
+        multiLine: true,
+      ).firstMatch(file.readAsStringSync());
+      return int.tryParse(match?.group(1) ?? '');
+    } on FileSystemException {
+      return null;
     }
   }
 

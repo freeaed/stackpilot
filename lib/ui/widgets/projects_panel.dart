@@ -24,6 +24,7 @@ class ProjectsPanel extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final sites = inventory?.sites ?? const <ProjectSite>[];
     final missing = inventory?.missingConfigs.length ?? 0;
+    final unmapped = inventory?.unmappedHosts.length ?? 0;
 
     return Container(
       color: Colors.white,
@@ -47,13 +48,16 @@ class ProjectsPanel extends StatelessWidget {
                   color: Color(0xFF7A8880),
                 ),
               ),
-              if (missing > 0 && onGenerate != null)
+              if ((missing > 0 || unmapped > 0) && onGenerate != null)
                 Padding(
                   padding: const EdgeInsets.only(left: 4),
                   child: IconButton(
-                    tooltip:
-                        'Generate $missing missing virtual host '
-                        '${missing == 1 ? 'config' : 'configs'}',
+                    tooltip: missing > 0
+                        ? 'Generate $missing missing virtual host '
+                              '${missing == 1 ? 'config' : 'configs'}'
+                        : 'Map $unmapped host '
+                              '${unmapped == 1 ? 'entry' : 'entries'} in the '
+                              'hosts file',
                     icon: const Icon(Icons.auto_fix_high, size: 19),
                     onPressed: onGenerate,
                   ),

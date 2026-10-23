@@ -43,11 +43,20 @@ class ProjectSite {
 }
 
 class VhostGenerationResult {
-  const VhostGenerationResult({required this.created});
+  const VhostGenerationResult({
+    required this.created,
+    required this.mappedHosts,
+    this.hostsError,
+  });
 
   final List<String> created;
+  final List<String> mappedHosts;
 
-  bool get changed => created.isNotEmpty;
+  /// Set when the config files were written but the hosts file could not be
+  /// updated (usually because it needs administrator rights).
+  final String? hostsError;
+
+  bool get changed => created.isNotEmpty || mappedHosts.isNotEmpty;
 }
 
 /// Reads projects, virtual-host configs, and hosts entries from a stack.
@@ -55,6 +64,7 @@ class SiteInventory {
   SiteInventory._({
     required this.layout,
     required this.sitesEnabledDirectory,
+    required this.hostsPath,
     required this.sslCertificatePath,
     required this.sslKeyPath,
     required List<ProjectSite> sites,
@@ -62,8 +72,13 @@ class SiteInventory {
 
   static const defaultHostsPath = r'C:\Windows\System32\drivers\etc\hosts';
 
+  static const _hostsBlockStart =
+      '# StackPilot virtual hosts - managed block, do not edit';
+  static const _hostsBlockEnd = '# End StackPilot virtual hosts';
+
   static SiteInventory load(StackLayout layout, {String? hostsPath}) {
-    final hosts = _readHosts(hostsPath ?? defaultHostsPath);
+    final resolvedHostsPath = hostsPath ?? defaultHostsPath;
+    final hosts = _readHosts(resolvedHostsPath);
     final sitesDirectory = Directory(
       p.join(layout.root, 'etc', 'apache2', 'sites-enabled'),
     );
@@ -112,6 +127,7 @@ class SiteInventory {
     return SiteInventory._(
       layout: layout,
       sitesEnabledDirectory: sitesDirectory.path,
+      hostsPath: resolvedHostsPath,
       sslCertificatePath: certificate,
       sslKeyPath: key,
       sites: sites,
@@ -120,6 +136,7 @@ class SiteInventory {
 
   final StackLayout layout;
   final String sitesEnabledDirectory;
+  final String hostsPath;
   final String sslCertificatePath;
   final String sslKeyPath;
   final List<ProjectSite> sites;
@@ -130,9 +147,13 @@ class SiteInventory {
   List<ProjectSite> get unmappedHosts =>
       sites.where((site) => !site.hostsMapped).toList();
 
-  /// Creates only missing `auto.<host>.conf` files. Existing files and hosts
-  /// entries are never changed.
-  VhostGenerationResult generateMissing() {
+  /// Creates only missing `auto.<host>.conf` files and, when [mapHosts] is
+  /// true, adds a managed block of `127.0.0.1` entries to the hosts file.
+  ///
+  /// Existing config files and unrelated hosts lines are never changed. A
+  /// hosts write that fails (normally an access-denied error) is reported in
+  /// [VhostGenerationResult.hostsError] so the generated configs still work.
+  VhostGenerationResult generateMissing({bool mapHosts = true}) {
     final directory = Directory(sitesEnabledDirectory);
     if (!directory.existsSync()) {
       directory.createSync(recursive: true);
@@ -143,7 +164,90 @@ class SiteInventory {
       File(site.configPath).writeAsStringSync(_render(site));
       created.add(site.configPath);
     }
-    return VhostGenerationResult(created: created);
+
+    final mapped = <String>[];
+    String? hostsError;
+    if (mapHosts) {
+      final pending = unmappedHosts.map((site) => site.host).toList();
+      if (pending.isNotEmpty) {
+        try {
+          mapped.addAll(_mapHosts(pending));
+        } on FileSystemException catch (error) {
+          hostsError = error.message;
+        }
+      }
+    }
+
+    return VhostGenerationResult(
+      created: created,
+      mappedHosts: mapped,
+      hostsError: hostsError,
+    );
+  }
+
+  /// Adds [hosts] to the managed block in the hosts file.
+  ///
+  /// Returns the names that were not mapped before. The block is rewritten in
+  /// place so repeated runs stay stable and unrelated lines are preserved.
+  List<String> _mapHosts(List<String> hosts) {
+    final file = File(hostsPath);
+    final outside = <String>[];
+    final block = <String>[];
+    var inBlock = false;
+    var hadBlock = false;
+
+    for (final line in _readHosts(hostsPath)) {
+      final trimmed = line.trim();
+      if (trimmed.toLowerCase() == _hostsBlockStart.toLowerCase()) {
+        inBlock = true;
+        hadBlock = true;
+        continue;
+      }
+      if (trimmed.toLowerCase() == _hostsBlockEnd.toLowerCase()) {
+        inBlock = false;
+        continue;
+      }
+      if (inBlock) {
+        final parts = trimmed.split(RegExp(r'\s+'));
+        for (final name in parts.skip(1)) {
+          if (name.isNotEmpty) {
+            block.add(name);
+          }
+        }
+        continue;
+      }
+      outside.add(line);
+    }
+
+    final added = <String>[];
+    for (final host in hosts) {
+      if (block.any(
+        (existing) => existing.toLowerCase() == host.toLowerCase(),
+      )) {
+        continue;
+      }
+      block.add(host);
+      added.add(host);
+    }
+    if (added.isEmpty && hadBlock) {
+      return const [];
+    }
+
+    while (outside.isNotEmpty && outside.last.trim().isEmpty) {
+      outside.removeLast();
+    }
+
+    final output = <String>[
+      ...outside,
+      if (outside.isNotEmpty) '',
+      _hostsBlockStart,
+      for (final host in block) '127.0.0.1 $host',
+      _hostsBlockEnd,
+      '',
+    ];
+    file.parent.createSync(recursive: true);
+    file.writeAsStringSync(output.join('\r\n'));
+    return added;
   }
 
   String _render(ProjectSite site) {

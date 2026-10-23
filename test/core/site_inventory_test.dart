@@ -131,4 +131,86 @@ define SITE "blog.test"
     expect(blog.sslEnabled, isFalse);
     expect(inventory.missingConfigs.map((site) => site.name), ['shop']);
   });
+
+  test('adds a managed hosts block and keeps unrelated lines', () {
+    createStack();
+    File(hostsPath).writeAsStringSync(
+      '127.0.0.1 localhost\r\n'
+      '# keep this comment\r\n'
+      '\r\n'
+      '# StackPilot virtual hosts - managed block, do not edit\r\n'
+      '127.0.0.1 old.test\r\n'
+      '# End StackPilot virtual hosts\r\n',
+    );
+    final layout = StackLayout.detect(root)!;
+    final inventory = SiteInventory.load(layout, hostsPath: hostsPath);
+
+    expect(
+      inventory.unmappedHosts.map((site) => site.host),
+      containsAll(['blog.test', 'shop.test']),
+    );
+
+    final result = inventory.generateMissing();
+
+    expect(result.mappedHosts, containsAll(['blog.test', 'shop.test']));
+    expect(result.hostsError, isNull);
+    final hosts = File(hostsPath).readAsStringSync();
+    expect(hosts, contains('127.0.0.1 localhost'));
+    expect(hosts, contains('# keep this comment'));
+    expect(hosts, contains('127.0.0.1 old.test'));
+    expect(hosts, contains('127.0.0.1 blog.test'));
+    expect(hosts, contains('127.0.0.1 shop.test'));
+
+    final reloaded = SiteInventory.load(layout, hostsPath: hostsPath);
+    expect(reloaded.unmappedHosts, isEmpty);
+    expect(reloaded.missingConfigs, isEmpty);
+    expect(reloaded.generateMissing().changed, isFalse);
+    expect(
+      RegExp('blog\\.test').allMatches(File(hostsPath).readAsStringSync()),
+      hasLength(1),
+    );
+  });
+
+  test('leaves the hosts file alone when mapping is turned off', () {
+    createStack();
+    File(hostsPath).writeAsStringSync('127.0.0.1 localhost\r\n');
+
+    final inventory = SiteInventory.load(
+      StackLayout.detect(root)!,
+      hostsPath: hostsPath,
+    );
+    final result = inventory.generateMissing(mapHosts: false);
+
+    expect(result.created, hasLength(2));
+    expect(result.mappedHosts, isEmpty);
+    expect(result.hostsError, isNull);
+    expect(File(hostsPath).readAsStringSync(), '127.0.0.1 localhost\r\n');
+  });
+
+  test('reports an unwritable hosts file but still writes the configs', () {
+    createStack();
+    Directory(hostsPath).createSync();
+
+    final inventory = SiteInventory.load(
+      StackLayout.detect(root)!,
+      hostsPath: hostsPath,
+    );
+    final result = inventory.generateMissing();
+
+    expect(result.created, hasLength(2));
+    expect(result.mappedHosts, isEmpty);
+    expect(result.hostsError, isNotNull);
+    expect(
+      File(
+        p.join(
+          root,
+          'etc',
+          'apache2',
+          'sites-enabled',
+          'auto.blog.test.conf',
+        ),
+      ).existsSync(),
+      isTrue,
+    );
+  });
 }

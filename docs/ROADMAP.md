@@ -46,14 +46,23 @@ a requirement.
       through **Add version → ZIP/folder**. A bundled payload is deliberately
       left to Stage 3 if the installer ever needs to work without a network.
 
-### 2d. De-Laragon the details (next)
+### 2d. De-Laragon the details (in progress)
 
-- [ ] Replace remaining `bin/laragon/laragon.cmd` PATH handling with a
+- [x] Replace remaining `bin/laragon/laragon.cmd` PATH handling with a
       StackPilot-generated launcher (`bin/stackpilot.cmd`) for native stacks.
-- [ ] Generate Apache/Nginx configs from templates instead of patching a
-      vendor-supplied config.
-- [ ] Native virtual hosts + `hosts` file management owned by StackPilot.
-- [ ] Default ports and conflict detection (3306/5432/6379 already in use).
+      It prepends the active binaries to `PATH`, sets `OPENSSL_CONF`, and is
+      rewritten whenever a version changes.
+- [x] Native virtual hosts + `hosts` file management owned by StackPilot.
+      Missing configs and a managed `127.0.0.1` block are written together;
+      unrelated hosts lines are preserved, and an unwritable hosts file is
+      reported with the exact lines to add instead of failing the configs.
+- [x] Default ports and conflict detection. Starting a service probes its port
+      (Apache/Nginx read from their config, MySQL/PostgreSQL/Redis/Mailpit from
+      the stack marker) and refuses to start with an actionable message.
+- [ ] Generate Apache configs from templates instead of patching a
+      vendor-supplied config. Nginx, PHP, MySQL, Redis, PostgreSQL, and the
+      vhosts are already generated from StackPilot-owned templates; Apache
+      still starts from Apache Lounge's `httpd.conf`.
 - [ ] Migrate an existing Laragon stack into a StackPilot stack (copy or
       in-place adopt).
 

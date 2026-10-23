@@ -157,11 +157,13 @@ Version=node-v22
     List<_FakeProcess>? processes,
     ProcessInspector? inspector,
     List<int>? adopted,
+    bool portFree = true,
   }) {
     var nextPid = 4200;
     return ServiceManager(
       layout,
       stopTimeout: stopTimeout,
+      isPortFree: (port) async => portFree,
       startProcess: (executable, arguments, workingDirectory) async {
         starts?.add(_StartCall(executable, arguments, workingDirectory));
         final process = _FakeProcess(nextPid++);
@@ -204,6 +206,45 @@ Version=node-v22
       p.join(root, 'bin', 'apache', 'httpd-2.4.66'),
     );
     expect(manager.isRunning(StackComponent.apache), isTrue);
+  });
+
+  test('refuses to start when its port is already in use', () async {
+    final starts = <_StartCall>[];
+    final manager = createManager(starts: starts, portFree: false);
+
+    await expectLater(
+      manager.start(StackComponent.apache),
+      throwsA(
+        isA<ServiceException>().having(
+          (error) => error.message,
+          'message',
+          contains('port 80'),
+        ),
+      ),
+    );
+    expect(starts, isEmpty);
+    expect(manager.isRunning(StackComponent.apache), isFalse);
+  });
+
+  test('reads the HTTP port from the Apache config', () async {
+    final config = File(
+      p.join(root, 'bin', 'apache', 'httpd-2.4.66', 'conf', 'httpd.conf'),
+    );
+    config.parent.createSync(recursive: true);
+    config.writeAsStringSync('Listen 0.0.0.0:8080\n');
+
+    final manager = createManager(portFree: false);
+
+    await expectLater(
+      manager.start(StackComponent.apache),
+      throwsA(
+        isA<ServiceException>().having(
+          (error) => error.message,
+          'message',
+          contains('port 8080'),
+        ),
+      ),
+    );
   });
 
   test('stops Apache gracefully without killing its tree', () async {

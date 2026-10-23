@@ -120,6 +120,14 @@ class StackLayout {
   /// Absolute path of the configuration file that identifies the stack.
   final String markerPath;
 
+  /// Script that puts this stack's active binaries on `PATH`.
+  ///
+  /// Laragon stacks keep their own `bin/laragon/laragon.cmd`; StackPilot
+  /// generates `bin/stackpilot.cmd` for the stacks it creates.
+  String get launcherPath => flavor == StackFlavor.laragon
+      ? p.join(root, 'bin', 'laragon', 'laragon.cmd')
+      : p.join(root, 'bin', 'stackpilot.cmd');
+
   final IniDocument config;
   final Map<StackComponent, List<StackInstall>> _installed;
   final Map<StackComponent, StackInstall?> _active;
@@ -211,6 +219,12 @@ class StackLayout {
 
   int get mysqlPort =>
       int.tryParse(config.value('mysql', 'Port')?.trim() ?? '') ?? 3306;
+
+  int get redisPort =>
+      int.tryParse(config.value('redis', 'Port')?.trim() ?? '') ?? 6379;
+
+  int get mailpitPort =>
+      int.tryParse(config.value('mailpit', 'Port')?.trim() ?? '') ?? 8025;
 
   /// PostgreSQL binaries keep their cluster in a data folder rather than next
   /// to the version, so the first existing candidate wins.

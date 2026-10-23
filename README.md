@@ -25,7 +25,9 @@ Windows executables.
 - **Service control** – start and stop Apache, Nginx, MySQL, PostgreSQL, Redis,
   Memcached, and Mailpit. Services started by StackPilot are owned and stopped
   with the app; services started elsewhere are adopted only when their
-  executable lives inside the current stack.
+  executable lives inside the current stack. Starting a service checks its port
+  first (80, 3306, 5432, 6379, 8025) and explains when another program already
+  holds it.
 - **Version switching** – click the **Version** control on any PHP, MySQL,
   PostgreSQL, Apache, Nginx, Node.js, Redis, Memcached, or Mailpit card, then
   choose an installed version. StackPilot updates `usr/profile/default.ini` and
@@ -42,6 +44,10 @@ Windows executables.
   pointed at this stack's `www` and `etc/apache2` folders, and PHP/MySQL versions
   get a working `php.ini`/`my.ini` when one is missing. A new PHP `php.ini`
   enables the extensions Laragon turns on by default.
+- **Native launcher** – every StackPilot stack gets `bin\stackpilot.cmd`. Run
+  it to open a terminal with the active PHP, Node.js, Apache, MySQL,
+  PostgreSQL, Redis, Memcached, and Mailpit binaries already on `PATH`
+  (`OPENSSL_CONF` is set too). It is regenerated whenever you switch versions.
 - **Switch stacks at runtime** – use **Change stack** in the header to point the
   app at another stack folder. The version menus immediately reflect that
   stack's installed versions.
@@ -55,7 +61,9 @@ Windows executables.
   common PHP `php.ini` limits in one dialog.
 - **Projects and virtual hosts** – list projects under the document root,
   detect missing/outdated vhost configs and hosts entries, and generate missing
-  `auto.<project>.test.conf` files.
+  `auto.<project>.test.conf` files. **Add hosts entries** writes a managed
+  `127.0.0.1` block to the hosts file and leaves unrelated lines alone; if
+  Windows denies the write, StackPilot shows the exact lines to add instead.
 - **phpMyAdmin** – the **Database** action opens phpMyAdmin when it is already
   in the document root. Otherwise it installs the official "all languages" ZIP
   into `www/phpmyadmin` and writes a config that matches the stack MySQL port
