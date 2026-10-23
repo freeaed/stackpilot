@@ -1,0 +1,16 @@
+{
+    "schema":  1,
+    "generated":  "2026-10-23T17:17:28Z",
+    "channels":  {
+                     "preview":  {
+                                     "version":  "1.0.0-preview.2",
+                                     "notes":  "First release with signed in-app updates. Preview channel, unsigned installer: for testing only.",
+                                     "published":  "2026-10-23T17:17:28Z",
+                                     "installer":  {
+                                                       "url":  "https://github.com/freeaed/stackpilot/releases/download/v1.0.0-preview.2/StackPilot-1.0.0-preview.2-Setup.exe",
+                                                       "sha256":  "cc09327b72c4608947ffc591e25f7d58b5a452fa8c32bd13b8ced59d97af9473",
+                                                       "size":  11654123
+                                                   }
+                                 }
+                 }
+}
