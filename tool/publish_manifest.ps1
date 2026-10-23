@@ -74,7 +74,14 @@ try {
     Copy-Item -Path $ManifestPath -Destination (Join-Path $updatesDir 'manifest.json') -Force
     Copy-Item -Path $SignaturePath -Destination (Join-Path $updatesDir 'manifest.json.sig') -Force
 
-    git -C $worktree add --all
+    # The signature covers exact bytes, so no end-of-line or encoding
+    # conversion may happen on commit.
+    [IO.File]::WriteAllText(
+        (Join-Path $worktree '.gitattributes'),
+        "* -text`n",
+        (New-Object Text.ASCIIEncoding))
+
+    git -C $worktree -c core.autocrlf=false add --all
     if ($LASTEXITCODE -ne 0) {
         throw 'Could not stage the manifest.'
     }
@@ -86,6 +93,26 @@ try {
         git -C $worktree commit -m "Publish update manifest: $summary"
         if ($LASTEXITCODE -ne 0) {
             throw 'Could not commit the manifest.'
+        }
+
+        # Prove the committed bytes match the signed files: the signature covers
+        # exact bytes, so a stray line-ending conversion would break every client.
+        $pairs = @(
+            @{ Source = $ManifestPath; Repo = 'updates/manifest.json' },
+            @{ Source = $SignaturePath; Repo = 'updates/manifest.json.sig' }
+        )
+        foreach ($pair in $pairs) {
+            $published = Join-Path $worktree $pair.Repo
+            Remove-Item -Path $published -Force
+            git -C $worktree checkout -- $pair.Repo
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not read back $($pair.Repo)."
+            }
+            $expected = (Get-FileHash -Algorithm SHA256 -Path $pair.Source).Hash
+            $actual = (Get-FileHash -Algorithm SHA256 -Path $published).Hash
+            if ($expected -ne $actual) {
+                throw "$($pair.Repo) changed on commit; the signature would not match."
+            }
         }
         if ($SkipPush) {
             Write-Host "Committed to $Branch; skipping push." -ForegroundColor Yellow

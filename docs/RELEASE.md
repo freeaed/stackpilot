@@ -204,6 +204,11 @@ minute. Use `-SkipPush` to inspect the commit first.
 Because signing needs the offline private key, the manifest is published from a
 maintainer machine, never from CI.
 
+The `gh-pages` branch carries a `.gitattributes` with `* -text`, and the
+publisher re-reads the committed files and compares their SHA-256 with the
+signed originals before pushing. Git's end-of-line conversion would otherwise
+rewrite the bytes and invalidate every signature.
+
 ### How an update runs
 
 1. On startup (when enabled) or from **Settings → Updates**, the app fetches
@@ -267,7 +272,9 @@ ignored and the component downloads normally.
 
 - Push and pull request: `flutter pub get`, `flutter analyze`, `flutter test`.
 - Tag `v*`: the same checks, then `tool/build_installer.ps1`, a
-  `SHA256SUMS.txt`, an installer artifact, and a GitHub release.
+  `SHA256SUMS.txt`, an installer artifact, and a GitHub release. A tag with a
+  pre-release suffix is published as a pre-release, so it never becomes
+  *latest*.
 
 Repository variables:
 

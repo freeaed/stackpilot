@@ -130,15 +130,30 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = '${{ github.ref_name }}'
-          $files = @(Get-ChildItem build/installer/*.exe) +
-            @(Get-Item build/installer/SHA256SUMS.txt)
+          $files = @()
+          $files += Get-ChildItem build/installer/*.exe |
+            ForEach-Object { $_.FullName }
+          $files += (Get-Item build/installer/SHA256SUMS.txt).FullName
+
+          $releaseArgs = @(
+            '--title', "StackPilot $tag",
+            '--generate-notes',
+            '--verify-tag')
+          # A pre-release tag stays out of "latest" so stable users never see it.
+          $isPreview = $tag.Contains('-')
+          if ($isPreview) {
+            $releaseArgs += '--prerelease'
+          }
+
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag @($files | ForEach-Object { $_.FullName }) --clobber
+            gh release upload $tag @files --clobber
+            if ($LASTEXITCODE -eq 0 -and $isPreview) {
+              gh release edit $tag --prerelease
+            }
           }
           else {
-            gh release create $tag @($files | ForEach-Object { $_.FullName }) `
-              --title "StackPilot $tag" --generate-notes --verify-tag
+            gh release create $tag @files @releaseArgs
           }
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
