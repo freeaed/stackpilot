@@ -1,0 +1,145 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+    tags: ['v*']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+
+jobs:
+  test:
+    name: Analyze and test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+  release:
+    name: Build installer
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+
+      - name: Build offline payload
+        if: vars.STACKPILOT_INCLUDE_PAYLOAD == 'true'
+        run: dart run tool/build_payload.dart --output build/payload
+
+      - name: Build installer
+        shell: pwsh
+        env:
+          STACKPILOT_UPDATE_URL: ${{ vars.STACKPILOT_UPDATE_URL }}
+          STACKPILOT_UPDATE_PUBLIC_KEY: ${{ vars.STACKPILOT_UPDATE_PUBLIC_KEY }}
+          STACKPILOT_INCLUDE_PAYLOAD: ${{ vars.STACKPILOT_INCLUDE_PAYLOAD }}
+          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.ref_name }}'
+          $version = $tag.TrimStart('v')
+          $channel = if ($version.Contains('-')) { 'preview' } else { 'stable' }
+
+          $buildArgs = @('-Version', $version, '-Channel', $channel)
+          if ($env:STACKPILOT_INCLUDE_PAYLOAD -eq 'true') {
+            $buildArgs += @('-PayloadDir', 'build/payload')
+          }
+
+          if ($env:SIGNING_CERT_BASE64) {
+            $certPath = Join-Path $env:RUNNER_TEMP 'stackpilot-signing.pfx'
+            [IO.File]::WriteAllBytes(
+              $certPath,
+              [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+            $buildArgs += @(
+              '-CertificatePath', $certPath,
+              '-CertificatePassword', $env:SIGNING_CERT_PASSWORD)
+          }
+          else {
+            Write-Warning 'No signing certificate secret; building an unsigned installer.'
+            $buildArgs += '-SkipSign'
+          }
+
+          & pwsh -NoProfile -File tool/build_installer.ps1 @buildArgs
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Write checksums
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem build/installer/*.exe |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $installer) {
+            throw 'No installer was produced.'
+          }
+          $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" |
+            Out-File -Encoding ascii build/installer/SHA256SUMS.txt
+          Write-Host "$($installer.Name): $hash"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: StackPilot-${{ github.ref_name }}
+          path: |
+            build/installer/*.exe
+            build/installer/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.ref_name }}'
+          $files = @(Get-ChildItem build/installer/*.exe) +
+            @(Get-Item build/installer/SHA256SUMS.txt)
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag @($files | ForEach-Object { $_.FullName }) --clobber
+          }
+          else {
+            gh release create $tag @($files | ForEach-Object { $_.FullName }) `
+              --title "StackPilot $tag" --generate-notes --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }

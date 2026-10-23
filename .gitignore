@@ -15,6 +15,11 @@ migrate_working_dir/
 # Local build tools (for example Inno Setup used by tool/build_installer.ps1)
 .tools/
 
+# Release signing material (never commit certificates or private keys)
+*.pfx
+*.p12
+*.key
+
 # IntelliJ related
 *.iml
 *.ipr

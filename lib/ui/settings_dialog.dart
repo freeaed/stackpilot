@@ -3,10 +3,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/app_info.dart';
+import '../core/app_log.dart';
+import '../core/app_preferences.dart';
+import '../core/diagnostics.dart';
 import '../core/stack_catalog.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
 import '../core/stack_settings.dart';
+import '../core/update_service.dart';
 import 'windows_dialogs.dart';
 
 const _serviceLabels = {
@@ -21,12 +26,15 @@ const _serviceLabels = {
 
 /// What the user asked for when the settings dialog closed.
 class StackSettingsOutcome {
-  const StackSettingsOutcome.saved() : stackRoot = null;
+  const StackSettingsOutcome.saved({this.preferences}) : stackRoot = null;
 
   /// Close the dialog and open [stackRoot] instead of the current stack.
-  const StackSettingsOutcome.switchTo(this.stackRoot);
+  const StackSettingsOutcome.switchTo(this.stackRoot) : preferences = null;
 
   final String? stackRoot;
+
+  /// Preferences changed in this dialog, when any.
+  final AppPreferences? preferences;
 }
 
 Future<StackSettingsOutcome?> showStackSettingsDialog(
@@ -34,6 +42,10 @@ Future<StackSettingsOutcome?> showStackSettingsDialog(
   required StackLayout layout,
   required StackEditor editor,
   String? stacksFolder,
+  AppPreferences preferences = AppPreferences.empty,
+  AppPreferencesStore? preferencesStore,
+  Iterable<StackComponent> runningServices = const [],
+  int initialTabIndex = 0,
 }) {
   return showDialog<StackSettingsOutcome>(
     context: context,
@@ -42,6 +54,10 @@ Future<StackSettingsOutcome?> showStackSettingsDialog(
       layout: layout,
       editor: editor,
       stacksFolder: stacksFolder,
+      preferences: preferences,
+      preferencesStore: preferencesStore,
+      runningServices: runningServices,
+      initialTabIndex: initialTabIndex,
     ),
   );
 }
@@ -51,11 +67,19 @@ class _StackSettingsDialog extends StatefulWidget {
     required this.layout,
     required this.editor,
     this.stacksFolder,
+    this.preferences = AppPreferences.empty,
+    this.preferencesStore,
+    this.runningServices = const [],
+    this.initialTabIndex = 0,
   });
 
   final StackLayout layout;
   final StackEditor editor;
   final String? stacksFolder;
+  final AppPreferences preferences;
+  final AppPreferencesStore? preferencesStore;
+  final Iterable<StackComponent> runningServices;
+  final int initialTabIndex;
 
   @override
   State<_StackSettingsDialog> createState() => _StackSettingsDialogState();
@@ -101,6 +125,21 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
   late List<String> _detectedStacks = _scanStacks(_stacksFolder.text);
   bool _switching = false;
 
+  late final TextEditingController _updateUrl = TextEditingController(
+    text: widget.preferences.updateManifestUrl ?? AppInfo.updateManifestUrl,
+  );
+  late ReleaseChannel _updateChannel = widget.preferences.updateChannel;
+  late bool _autoCheckUpdates = widget.preferences.autoCheckUpdates;
+  bool _checkingUpdate = false;
+  bool _installingUpdate = false;
+  double? _downloadFraction;
+  UpdateCheckResult? _updateResult;
+  String? _updateError;
+  late final List<CachedInstaller> _cachedInstallers =
+      UpdateService.scanCache();
+  String? _bundlePath;
+  bool _creatingBundle = false;
+
   bool _saving = false;
   String? _error;
 
@@ -115,6 +154,7 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
     _postMax.dispose();
     _executionTime.dispose();
     _stacksFolder.dispose();
+    _updateUrl.dispose();
     super.dispose();
   }
 
@@ -213,8 +253,17 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
 
     try {
       widget.editor.applySettings(settings);
+      final url = _updateUrl.text.trim();
+      final updatedPreferences = widget.preferences.copyWith(
+        updateChannel: _updateChannel,
+        updateManifestUrl: url.isEmpty ? null : url,
+        autoCheckUpdates: _autoCheckUpdates,
+      );
+      await widget.preferencesStore?.save(updatedPreferences);
       if (mounted) {
-        Navigator.of(context).pop(const StackSettingsOutcome.saved());
+        Navigator.of(
+          context,
+        ).pop(StackSettingsOutcome.saved(preferences: updatedPreferences));
       }
     } on StackEditException catch (error) {
       _fail(error.message);
@@ -247,13 +296,15 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
       ),
       contentPadding: const EdgeInsets.fromLTRB(24, 12, 24, 0),
       content: SizedBox(
-        width: 620,
-        height: 470,
+        width: 680,
+        height: 500,
         child: DefaultTabController(
-          length: 6,
+          length: 8,
+          initialIndex: widget.initialTabIndex,
           child: Column(
             children: [
               const TabBar(
+                isScrollable: true,
                 tabs: [
                   Tab(text: 'Stacks'),
                   Tab(text: 'General'),
@@ -261,6 +312,8 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                   Tab(text: 'MySQL'),
                   Tab(text: 'PostgreSQL'),
                   Tab(text: 'PHP'),
+                  Tab(text: 'Updates'),
+                  Tab(text: 'Diagnostics'),
                 ],
               ),
               const SizedBox(height: 10),
@@ -273,6 +326,8 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
                     _mysqlTab(),
                     _postgresqlTab(),
                     _phpTab(),
+                    _updatesTab(),
+                    _diagnosticsTab(),
                   ],
                 ),
               ),
@@ -580,6 +635,526 @@ class _StackSettingsDialogState extends State<_StackSettingsDialog> {
         const _Hint('Restart Apache after changing PHP settings.'),
       ],
     );
+  }
+
+  Widget _updatesTab() {
+    final keyConfigured = AppInfo.updatePublicKey.trim().isNotEmpty;
+    final url = _updateUrl.text.trim();
+    final canCheck =
+        keyConfigured &&
+        url.isNotEmpty &&
+        !_checkingUpdate &&
+        !_installingUpdate;
+    final result = _updateResult;
+    final cached = _cachedInstallers;
+
+    return ListView(
+      padding: const EdgeInsets.only(top: 4),
+      children: [
+        Text(
+          'This build is StackPilot ${AppInfo.versionLabel} '
+          '(${AppInfo.channel.label}). Updates are signed and their installer '
+          'is checked before it runs.',
+          style: const TextStyle(fontSize: 12.5, color: Color(0xFF52605A)),
+        ),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<ReleaseChannel>(
+          initialValue: _updateChannel,
+          decoration: const InputDecoration(
+            labelText: 'Release channel',
+            border: OutlineInputBorder(),
+          ),
+          items: [
+            for (final channel in ReleaseChannel.values)
+              DropdownMenuItem(
+                value: channel,
+                child: Text(channel.label),
+              ),
+          ],
+          onChanged: _checkingUpdate || _installingUpdate
+              ? null
+              : (value) {
+                  if (value == null) {
+                    return;
+                  }
+                  setState(() {
+                    _updateChannel = value;
+                    _updateResult = null;
+                  });
+                },
+        ),
+        const SizedBox(height: 6),
+        Text(
+          _updateChannel.description,
+          style: const TextStyle(fontSize: 11.5, color: Color(0xFF7A8880)),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _updateUrl,
+          enabled: !_checkingUpdate && !_installingUpdate,
+          onChanged: (_) => setState(() => _updateResult = null),
+          decoration: const InputDecoration(
+            labelText: 'Update manifest URL',
+            border: OutlineInputBorder(),
+            helperText:
+                'Leave blank to use the URL compiled into this build. The '
+                'matching .sig file must be published next to it.',
+          ),
+        ),
+        SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Check for updates on startup'),
+          subtitle: const Text('Only runs when this build has an update source.'),
+          value: _autoCheckUpdates,
+          onChanged: _checkingUpdate || _installingUpdate
+              ? null
+              : (value) => setState(() => _autoCheckUpdates = value),
+        ),
+        if (!keyConfigured)
+          const _Hint(
+            'This build has no update signing key, so update checks are '
+            'disabled. Release builds pass STACKPILOT_UPDATE_PUBLIC_KEY.',
+          ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            FilledButton.icon(
+              onPressed: canCheck ? _checkForUpdates : null,
+              icon: _checkingUpdate
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.system_update_alt, size: 18),
+              label: Text(_checkingUpdate ? 'Checking...' : 'Check now'),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              _checkingUpdate
+                  ? 'Contacting the update server...'
+                  : 'Current version: ${AppInfo.versionLabel}',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
+            ),
+          ],
+        ),
+        if (_updateError != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFDECEC),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Text(
+              _updateError!,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9B1C1C)),
+            ),
+          ),
+        ],
+        if (result != null && !result.hasUpdate) ...[
+          const SizedBox(height: 12),
+          _Hint('StackPilot is up to date on the ${result.channel.label} channel.'),
+        ],
+        if (result?.release case final release?) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEDF7F1),
+              borderRadius: BorderRadius.circular(9),
+              border: Border.all(color: const Color(0xFFCFE0D6)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${release.label} is available',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0E7A4A),
+                  ),
+                ),
+                if (release.notes.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    release.notes,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF2F4238),
+                    ),
+                  ),
+                ],
+                if (release.sizeBytes != null) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    'Download: '
+                    '${(release.sizeBytes! / (1024 * 1024)).toStringAsFixed(1)} MB',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xFF7A8880),
+                    ),
+                  ),
+                ],
+                if (_installingUpdate) ...[
+                  const SizedBox(height: 10),
+                  LinearProgressIndicator(value: _downloadFraction),
+                  const SizedBox(height: 4),
+                  Text(
+                    _downloadFraction == null
+                        ? 'Downloading...'
+                        : 'Downloading ${(_downloadFraction! * 100).round()}%',
+                    style: const TextStyle(
+                      fontSize: 11.5,
+                      color: Color(0xFF7A8880),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                FilledButton.icon(
+                  onPressed: _installingUpdate
+                      ? null
+                      : () => _installUpdate(release),
+                  icon: const Icon(Icons.download, size: 18),
+                  label: const Text('Download and install'),
+                ),
+              ],
+            ),
+          ),
+        ],
+        if (cached.isNotEmpty) ...[
+          const SizedBox(height: 18),
+          Text(
+            'Downloaded installers',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const _Hint(
+            'Keep an older installer to roll back if a new version does not '
+            'work. Installing closes StackPilot.',
+          ),
+          for (final installer in cached)
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.history),
+              title: Text(installer.label),
+              subtitle: Text(
+                '${(installer.sizeBytes / (1024 * 1024)).toStringAsFixed(1)} '
+                'MB - ${installer.file.path}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 11.5),
+              ),
+              trailing: TextButton(
+                onPressed: _installingUpdate
+                    ? null
+                    : () => _installCached(installer),
+                child: const Text('Install'),
+              ),
+            ),
+        ],
+        const _Hint(
+          'Updates only replace the StackPilot application. Your stacks, '
+          'binaries, sites, and data stay where they are.',
+        ),
+      ],
+    );
+  }
+
+  Widget _diagnosticsTab() {
+    final logDirectory = AppLog.directoryPath;
+    return ListView(
+      padding: const EdgeInsets.only(top: 4),
+      children: [
+        Text(
+          'StackPilot logs errors and important actions locally. Nothing is '
+          'sent anywhere automatically.',
+          style: const TextStyle(fontSize: 12.5, color: Color(0xFF52605A)),
+        ),
+        const SizedBox(height: 14),
+        Text(
+          'Version: ${AppInfo.versionLabel} (${AppInfo.channel.id})',
+          style: const TextStyle(fontSize: 12.5),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          'Log folder: ${logDirectory ?? 'not available'}',
+          style: const TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
+        ),
+        const SizedBox(height: 14),
+        Row(
+          children: [
+            OutlinedButton.icon(
+              onPressed: logDirectory == null
+                  ? null
+                  : () => _openFolder(logDirectory),
+              icon: const Icon(Icons.folder_open, size: 18),
+              label: const Text('Open logs'),
+            ),
+            const SizedBox(width: 10),
+            FilledButton.icon(
+              onPressed: _creatingBundle ? null : _createBundle,
+              icon: _creatingBundle
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.archive_outlined, size: 18),
+              label: Text(
+                _creatingBundle ? 'Creating...' : 'Create report bundle',
+              ),
+            ),
+          ],
+        ),
+        if (_bundlePath != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEDF7F1),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Report bundle created',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF0E7A4A),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                SelectableText(
+                  _bundlePath!,
+                  style: const TextStyle(fontSize: 11.5),
+                ),
+                const SizedBox(height: 8),
+                TextButton.icon(
+                  onPressed: () => _openFolder(_bundlePath!),
+                  icon: const Icon(Icons.folder_open, size: 17),
+                  label: const Text('Show in Explorer'),
+                ),
+              ],
+            ),
+          ),
+        ],
+        const SizedBox(height: 16),
+        const _Hint(
+          'The bundle contains the log files, app and OS version, stack paths, '
+          'active component versions, and the stack marker. It does not contain '
+          'database data, project files, passwords, or environment variables. '
+          'Review it before sharing.',
+        ),
+      ],
+    );
+  }
+
+  AppPreferences _editedPreferences() {
+    final url = _updateUrl.text.trim();
+    return widget.preferences.copyWith(
+      updateChannel: _updateChannel,
+      updateManifestUrl: url.isEmpty ? null : url,
+      autoCheckUpdates: _autoCheckUpdates,
+    );
+  }
+
+  UpdateService? _buildUpdateService() {
+    final url = _updateUrl.text.trim();
+    final key = AppInfo.updatePublicKey.trim();
+    if (url.isEmpty || key.isEmpty) {
+      return null;
+    }
+    final uri = Uri.tryParse(url);
+    if (uri == null || uri.scheme != 'https' || !uri.hasAuthority) {
+      return null;
+    }
+    return UpdateService(
+      manifestUri: uri,
+      publicKey: key,
+      currentVersion: AppInfo.version,
+      channel: _updateChannel,
+    );
+  }
+
+  Future<void> _checkForUpdates() async {
+    final service = _buildUpdateService();
+    if (service == null) {
+      setState(() {
+        _updateError =
+            'Enter an HTTPS manifest URL and use a build with an update '
+            'signing key.';
+      });
+      return;
+    }
+    setState(() {
+      _checkingUpdate = true;
+      _updateError = null;
+      _updateResult = null;
+    });
+    try {
+      final result = await service.check();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _checkingUpdate = false;
+        _updateResult = result;
+      });
+    } on UpdateException catch (error) {
+      if (mounted) {
+        setState(() {
+          _checkingUpdate = false;
+          _updateError = error.message;
+        });
+      }
+    } on Object catch (error) {
+      AppLog.error('Update check failed', error: error);
+      if (mounted) {
+        setState(() {
+          _checkingUpdate = false;
+          _updateError = 'Could not check for updates: $error';
+        });
+      }
+    }
+  }
+
+  Future<void> _installUpdate(UpdateRelease release) async {
+    final service = _buildUpdateService();
+    if (service == null) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Install ${release.label}?'),
+        content: const Text(
+          'StackPilot downloads the signed installer, verifies its checksum, '
+          'then closes so the installer can replace the app. Your stacks and '
+          'data are not touched.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Download and install'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _installingUpdate = true;
+      _downloadFraction = null;
+      _updateError = null;
+    });
+    try {
+      final installer = await service.download(
+        release,
+        onProgress: (received, total) {
+          if (!mounted || total == null || total <= 0) {
+            return;
+          }
+          setState(() => _downloadFraction = received / total);
+        },
+      );
+      await service.launchInstaller(installer);
+      AppLog.info('Exiting for update to ${release.version}');
+      exit(0);
+    } on UpdateException catch (error) {
+      if (mounted) {
+        setState(() {
+          _installingUpdate = false;
+          _updateError = error.message;
+        });
+      }
+    } on Object catch (error) {
+      AppLog.error('Could not install update', error: error);
+      if (mounted) {
+        setState(() {
+          _installingUpdate = false;
+          _updateError = 'Could not install the update: $error';
+        });
+      }
+    }
+  }
+
+  Future<void> _installCached(CachedInstaller installer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Install ${installer.label}?'),
+        content: const Text(
+          'StackPilot closes and runs the cached installer. Use this to roll '
+          'back after a problem with a newer version.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Install'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) {
+      return;
+    }
+    try {
+      await UpdateService.runInstaller(installer.file);
+      exit(0);
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _updateError = 'Could not start the installer: $error');
+      }
+    }
+  }
+
+  Future<void> _createBundle() async {
+    setState(() {
+      _creatingBundle = true;
+      _error = null;
+    });
+    try {
+      AppLog.flush();
+      final bundle = Diagnostics.create(
+        preferences: _editedPreferences(),
+        layout: widget.layout,
+        runningServices: widget.runningServices,
+      );
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _creatingBundle = false;
+        _bundlePath = bundle.file.path;
+      });
+    } on FileSystemException catch (error) {
+      _fail('Could not create the report bundle: ${error.message}');
+    } on Object catch (error) {
+      AppLog.error('Could not create diagnostics bundle', error: error);
+      _fail('Could not create the report bundle: $error');
+    }
+  }
+
+  Future<void> _openFolder(String path) async {
+    try {
+      await Process.start('explorer.exe', [path]);
+    } on ProcessException catch (error) {
+      _fail('Could not open $path: ${error.message}');
+    }
   }
 
   Widget _phpField(TextEditingController controller, String label) {

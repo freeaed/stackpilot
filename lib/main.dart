@@ -4,13 +4,45 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 
 import 'app.dart';
+import 'core/app_info.dart';
+import 'core/app_log.dart';
 import 'core/app_preferences.dart';
 import 'core/stack_resolution.dart';
 import 'core/window_shell.dart';
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  AppLog.initialize();
+  AppLog.info(
+    'Starting ${AppInfo.name} ${AppInfo.versionLabel} '
+    '(${AppInfo.channel.id}) on ${Platform.operatingSystem} '
+    '${Platform.operatingSystemVersion}',
+  );
 
+  FlutterError.onError = (details) {
+    AppLog.error(
+      'Flutter error: ${details.exceptionAsString()}',
+      error: details.exception,
+      stackTrace: details.stack,
+    );
+    FlutterError.presentError(details);
+  };
+  WidgetsBinding.instance.platformDispatcher.onError = (error, stack) {
+    AppLog.error('Unhandled platform error', error: error, stackTrace: stack);
+    return false;
+  };
+
+  runZonedGuarded(
+    () => _run(args),
+    (error, stack) => AppLog.error(
+      'Unhandled error',
+      error: error,
+      stackTrace: stack,
+    ),
+  );
+}
+
+Future<void> _run(List<String> args) async {
   final preferencesStore = AppPreferencesStore();
   final preferences = preferencesStore.load();
   final startup = resolveStartupStack(
@@ -19,6 +51,11 @@ Future<void> main(List<String> args) async {
   );
 
   final layout = startup.layout;
+  AppLog.info(
+    layout == null
+        ? 'No stack found (attempted ${startup.attemptedRoot})'
+        : 'Using stack ${layout.root} (${layout.flavor.label})',
+  );
   if (layout != null && layout.root != preferences.activeStack) {
     unawaited(
       preferencesStore.save(preferences.copyWith(activeStack: layout.root)),
@@ -28,7 +65,12 @@ Future<void> main(List<String> args) async {
   final windowShell = WindowShell(minimizeToTray: preferences.minimizeToTray);
   try {
     await windowShell.start();
-  } on Object catch (error) {
+  } on Object catch (error, stackTrace) {
+    AppLog.warn(
+      'Window and tray integration unavailable',
+      error: error,
+      stackTrace: stackTrace,
+    );
     debugPrint('StackPilot: window and tray integration unavailable: $error');
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/bundled_payload.dart';
 import '../../core/component_catalog.dart';
 import '../../core/stack_layout.dart';
 import '../../core/stack_provisioner.dart';
@@ -23,6 +24,7 @@ Future<StackSetupResult?> showStackSetupDialog(
   BuildContext context, {
   required StackLayout layout,
   StackProvisioner Function(StackLayout layout)? provisionerFactory,
+  BundledPayload? payload,
 }) {
   return showDialog<StackSetupResult>(
     context: context,
@@ -30,6 +32,7 @@ Future<StackSetupResult?> showStackSetupDialog(
     builder: (context) => _StackSetupDialog(
       layout: layout,
       provisionerFactory: provisionerFactory,
+      payload: payload,
     ),
   );
 }
@@ -38,10 +41,12 @@ class _StackSetupDialog extends StatefulWidget {
   const _StackSetupDialog({
     required this.layout,
     this.provisionerFactory,
+    this.payload,
   });
 
   final StackLayout layout;
   final StackProvisioner Function(StackLayout layout)? provisionerFactory;
+  final BundledPayload? payload;
 
   @override
   State<_StackSetupDialog> createState() => _StackSetupDialogState();
@@ -52,6 +57,8 @@ class _StackSetupDialogState extends State<_StackSetupDialog> {
     for (final release in ComponentCatalog.recommended)
       if (!ComponentCatalog.isInstalled(widget.layout, release)) release.id,
   };
+  late final BundledPayload? _payload =
+      widget.payload ?? BundledPayload.locate();
   final Map<String, ProvisionProgress> _progress = {};
 
   bool _busy = false;
@@ -125,6 +132,18 @@ class _StackSetupDialogState extends State<_StackSetupDialog> {
                   ),
                 ),
                 const SizedBox(height: 10),
+                if (_payload != null) ...[
+                  _MessageBox(
+                    color: const Color(0xFFEDF7F1),
+                    textColor: const Color(0xFF0E7A4A),
+                    text:
+                        'Offline payload found: ${_payload.count} '
+                        '${_payload.count == 1 ? 'component' : 'components'} '
+                        'will install from disk when available. Everything '
+                        'else downloads as usual.',
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 Row(
                   children: [
                     Text(
@@ -277,7 +296,7 @@ class _StackSetupDialogState extends State<_StackSetupDialog> {
     try {
       final provisioner =
           widget.provisionerFactory?.call(widget.layout) ??
-          StackProvisioner(widget.layout);
+          StackProvisioner(widget.layout, payload: _payload);
       final report = await provisioner.installAll(
         chosen,
         onProgress: (progress) {

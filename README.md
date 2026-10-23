@@ -90,6 +90,22 @@ Windows executables.
   folder.
 - **Local only** – no telemetry, no donation prompts.
 
+- **Updates** – release builds check a signed update manifest, verify the
+  installer's SHA-256, and can install a newer version in place. Choose the
+  **Stable** or **Preview** channel in **Settings → Updates**. Downloaded
+  installers are kept so an older version can be reinstalled if a new one
+  misbehaves. Updates never touch stacks or data.
+- **Offline payload** – a release can ship the pinned component archives next
+  to the app. The setup wizard uses them automatically and falls back to
+  downloading anything the payload does not carry. Archives are still checked
+  against the catalog SHA-256, so a stale payload is ignored.
+- **Logging and diagnostics** – StackPilot appends to
+  `%LOCALAPPDATA%\StackPilot\logs\stackpilot.log`, flushes every line so the
+  last entries survive a crash, and rotates at 2 MB. **Settings →
+  Diagnostics** creates a ZIP report with logs, build and OS details, stack
+  paths, component versions, and the stack marker. It contains no database
+  data, project files, passwords, or environment variables.
+
 ## Configuration safety
 
 Every file StackPilot rewrites is backed up once as
@@ -142,8 +158,10 @@ shown per component; a failed download does not stop the rest, and running the
 wizard again reuses what is already installed.
 
 Everything is cached locally, so after the first run the stack works offline.
-For a machine without network access, copy the archive or an extracted folder
-in through **Add version…**.
+If the release includes an offline payload, the wizard says how many components
+are available on disk and installs those first. For a machine without network
+access and without a payload, copy the archive or an extracted folder in
+through **Add version…**.
 
 Where things live inside a stack:
 
@@ -160,8 +178,9 @@ Where things live inside a stack:
 
 `docs/ROADMAP.md` tracks the next stages. Stage 2 (independence from Laragon)
 is complete: StackPilot owns its launcher, Apache config, hosts entries, ports,
-and can adopt an existing Laragon folder in place. Stage 3 covers packaging,
-updates, and release engineering.
+and can adopt an existing Laragon folder in place. Stage 3 (packaging,
+updates, logging, and release engineering) is complete as well; see
+`docs/RELEASE.md` for how a release is built, signed, and published.
 
 ## Branding
 
@@ -206,7 +225,11 @@ Inno Setup 6 is required; install it with
 
 The installer is per-user, has no UAC prompt, and installs to
 `%LOCALAPPDATA%\Programs\StackPilot`. It can optionally create a desktop
-shortcut. StackPilot does not bundle Laragon or any server binaries: on first
-launch it creates its own stack and downloads the components you pick, so the
-machine needs a network connection once.
+shortcut. StackPilot does not bundle Laragon or any server binaries by default:
+on first launch it creates its own stack and downloads the components you pick,
+so the machine needs a network connection once. Pass `-PayloadDir` to include
+an offline payload, `-UpdateUrl`/`-UpdatePublicKey` to enable signed updates,
+and `-CertificatePath` to sign the executable and installer. See
+`docs/RELEASE.md` for the full release, signing, manifest, payload, and CI
+workflow.
 

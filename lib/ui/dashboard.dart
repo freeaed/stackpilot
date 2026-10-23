@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/app_log.dart';
 import '../core/app_preferences.dart';
 import '../core/service_manager.dart';
 import '../core/site_inventory.dart';
@@ -11,6 +12,7 @@ import '../core/stack_adoption.dart';
 import '../core/stack_bootstrap.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
+import '../core/update_service.dart';
 import 'component_presentation.dart';
 import 'database_dialog.dart';
 import 'logs_dialog.dart';
@@ -22,6 +24,7 @@ import 'widgets/onboarding_view.dart';
 import 'widgets/projects_panel.dart';
 import 'widgets/services_panel.dart';
 import 'widgets/stack_setup_dialog.dart';
+import 'widgets/update_banner.dart';
 import 'windows_dialogs.dart';
 
 class DashboardPage extends StatefulWidget {
@@ -54,6 +57,8 @@ class _DashboardPageState extends State<DashboardPage> {
   final Set<StackComponent> _busy = {};
   Timer? _ticker;
   bool _bulkBusy = false;
+  UpdateRelease? _availableUpdate;
+  bool _updateDismissed = false;
 
   ServiceManager? _createManager(StackLayout? layout) {
     if (layout == null) {
@@ -68,6 +73,7 @@ class _DashboardPageState extends State<DashboardPage> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_refreshExternal());
+      unawaited(_maybeCheckForUpdates());
     });
   }
 
@@ -89,6 +95,33 @@ class _DashboardPageState extends State<DashboardPage> {
     }
     if (mounted) {
       setState(() {});
+    }
+  }
+
+  /// Checks the signed manifest once per launch when this build has an update
+  /// source and the user left automatic checks enabled.
+  Future<void> _maybeCheckForUpdates() async {
+    if (!_preferences.autoCheckUpdates) {
+      return;
+    }
+    final service = UpdateService.fromConfig(_preferences);
+    if (service == null) {
+      return;
+    }
+    try {
+      final result = await service.check();
+      if (!mounted || !result.hasUpdate) {
+        return;
+      }
+      setState(() => _availableUpdate = result.release);
+    } on UpdateException catch (error) {
+      AppLog.warn('Automatic update check failed: ${error.message}');
+    } on Object catch (error, stackTrace) {
+      AppLog.warn(
+        'Automatic update check failed',
+        error: error,
+        stackTrace: stackTrace,
+      );
     }
   }
 
@@ -483,7 +516,7 @@ class _DashboardPageState extends State<DashboardPage> {
     }
   }
 
-  Future<void> _openSettings() async {
+  Future<void> _openSettings({int initialTabIndex = 0}) async {
     final layout = _layout;
     if (layout == null) {
       return;
@@ -494,9 +527,18 @@ class _DashboardPageState extends State<DashboardPage> {
       layout: layout,
       editor: StackEditor(layout),
       stacksFolder: _preferences.stacksFolder,
+      preferences: _preferences,
+      preferencesStore: widget.preferencesStore,
+      runningServices: _services?.runningComponents ?? const [],
+      initialTabIndex: initialTabIndex,
     );
     if (outcome == null || !mounted) {
       return;
+    }
+
+    final updated = outcome.preferences;
+    if (updated != null) {
+      _preferences = updated;
     }
 
     final target = outcome.stackRoot;
@@ -854,6 +896,12 @@ class _DashboardPageState extends State<DashboardPage> {
                   onChangeStack: _changeStack,
                   onRescan: _refresh,
                 ),
+                if (_availableUpdate != null && !_updateDismissed)
+                  UpdateBanner(
+                    release: _availableUpdate!,
+                    onInstall: () => _openSettings(initialTabIndex: 6),
+                    onDismiss: () => setState(() => _updateDismissed = true),
+                  ),
                 Expanded(
                   child: Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,

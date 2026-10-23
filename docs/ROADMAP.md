@@ -1,7 +1,7 @@
 # StackPilot roadmap
 
-This file tracks the stages beyond 1.0. The current stage is **Stage 2:
-independence from Laragon**.
+This file tracks the stages beyond 1.0. The current stage is **Stage 3:
+distribution and release engineering**.
 
 ## Stage 2 — StackPilot-owned stacks
 
@@ -43,8 +43,8 @@ a requirement.
       tables, PostgreSQL `initdb`), never borrowed from another tool.
 - [x] Distribution model: **download on setup** from official sources with
       SHA-256 verification and a local cache. Offline installs stay possible
-      through **Add version → ZIP/folder**. A bundled payload is deliberately
-      left to Stage 3 if the installer ever needs to work without a network.
+      through **Add version → ZIP/folder**. Stage 3 adds an optional bundled
+      payload (`-PayloadDir`) for first runs without a network.
 
 ### 2d. De-Laragon the details (done)
 
@@ -71,12 +71,27 @@ a requirement.
 
 ## Stage 3 — Distribution and release engineering
 
-- [ ] Optional bundled component payload for fully offline first runs.
-- [ ] Auto-update (signed manifest, delta or full package, rollback).
-- [ ] Code signing for `stackpilot.exe` and the installer.
-- [ ] CI: analyze + tests on push, release build on tag, installer artifact.
-- [ ] Crash-safe logging and an in-app "report a problem" bundle.
-- [ ] Release channels (stable / preview).
+- [x] Optional bundled component payload for fully offline first runs.
+      `tool/build_payload.dart` builds `payload.json` from the catalog URLs and
+      checksums; the installer ships it next to `stackpilot.exe`, and the setup
+      wizard installs those archives after verifying the catalog SHA-256.
+- [x] Auto-update: signed manifest (Ed25519 detached signature), HTTPS-only
+      full installer download with size/SHA-256 verification, silent install,
+      and rollback by re-running a cached installer.
+- [x] Code signing for `stackpilot.exe` and the installer. The release script
+      signs both when a PFX is supplied and warns when it is not; CI reads the
+      certificate from secrets.
+- [x] CI: analyze + tests on push and pull request, release build on a `v*`
+      tag, checksum file, installer artifact, and GitHub release.
+- [x] Crash-safe logging (synchronous append and flush, 2 MB rotation, three
+      files) and an in-app diagnostics bundle with logs, build details, stack
+      metadata, and the marker file. No database data, project files,
+      passwords, or environment variables.
+- [x] Release channels (stable / preview), chosen in settings and compiled into
+      the build. A preview build also accepts a newer stable release.
+
+See `docs/RELEASE.md` for the build, signing, manifest, payload, and CI
+workflow.
 
 ## Stage 4 — Capability expansion
 

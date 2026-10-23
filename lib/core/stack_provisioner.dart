@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'app_log.dart';
+import 'bundled_payload.dart';
 import 'component_catalog.dart';
 import 'ini.dart';
 import 'stack_editor.dart';
@@ -137,15 +139,21 @@ class StackProvisioner {
     ProvisionCommand? run,
     ProvisionDigest? digest,
     this.installArchive,
+    BundledPayload? payload,
   }) : _download = download ?? _httpDownload,
        _run = run ?? _runProcess,
-       _digest = digest ?? _sha256OfFile;
+       _digest = digest ?? _sha256OfFile,
+       _payload = payload ?? BundledPayload.locate();
 
   final StackLayout layout;
   final ProvisionDownload _download;
   final ProvisionCommand _run;
   final ProvisionDigest _digest;
   final ProvisionInstall? installArchive;
+  final BundledPayload? _payload;
+
+  /// Offline archives found next to the app, if any.
+  BundledPayload? get payload => _payload;
 
   /// Latest view of the stack, refreshed after every install.
   StackLayout get _current => StackLayout.detect(layout.root) ?? layout;
@@ -296,30 +304,42 @@ class StackProvisioner {
       );
     }
 
-    final uri = Uri.tryParse(release.url);
-    if (uri == null ||
-        !uri.hasScheme ||
-        (uri.scheme != 'http' && uri.scheme != 'https')) {
-      throw ProvisionException(
-        '${release.label} has no valid HTTPS download URL.',
+    final bundled = _payload?.archiveFor(release);
+    Directory? temporary;
+    final File archive;
+    if (bundled != null) {
+      archive = bundled;
+      report(
+        ProvisionPhase.verifying,
+        message: 'Using the bundled ${p.basename(bundled.path)}.',
       );
-    }
+      AppLog.info('Installing ${release.label} from ${bundled.path}');
+    } else {
+      final uri = Uri.tryParse(release.url);
+      if (uri == null ||
+          !uri.hasScheme ||
+          (uri.scheme != 'http' && uri.scheme != 'https')) {
+        throw ProvisionException(
+          '${release.label} has no valid HTTPS download URL.',
+        );
+      }
 
-    final temporary = Directory.systemTemp.createTempSync(
-      'stackpilot_provision_',
-    );
-    try {
-      final archive = File(p.join(temporary.path, 'download.zip'));
+      temporary = Directory.systemTemp.createTempSync(
+        'stackpilot_provision_',
+      );
+      archive = File(p.join(temporary.path, 'download.zip'));
       report(ProvisionPhase.downloading);
       await _download(uri, archive, (received, total) {
         report(ProvisionPhase.downloading, received: received, total: total);
       });
+    }
 
+    try {
       report(ProvisionPhase.verifying);
       final digest = (await _digest(archive)).toLowerCase();
       if (digest != release.sha256.toLowerCase()) {
         throw ProvisionException(
-          'The ${release.label} download did not match its published '
+          'The ${release.label} archive did not match its published '
           'checksum, so it was not installed. Check the connection and try '
           'again.',
         );
@@ -340,7 +360,9 @@ class StackProvisioner {
         alreadyInstalled: false,
       );
     } finally {
-      _deleteQuietly(temporary);
+      if (temporary != null) {
+        _deleteQuietly(temporary);
+      }
     }
   }
 

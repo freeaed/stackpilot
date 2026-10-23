@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:stackpilot/core/app_info.dart';
 import 'package:stackpilot/core/app_preferences.dart';
 
 void main() {
@@ -27,6 +28,8 @@ void main() {
     expect(preferences.stacksFolder, isNull);
     expect(preferences.activeStack, isNull);
     expect(preferences.minimizeToTray, isTrue);
+    expect(preferences.updateChannel, AppInfo.channel);
+    expect(preferences.autoCheckUpdates, isTrue);
   });
 
   test('saves and loads the stacks folder and active stack', () async {
@@ -101,5 +104,50 @@ void main() {
     expect(updated.stacksFolder, r'C:\');
     expect(updated.activeStack, r'C:\laragon-wamp');
     expect(updated.minimizeToTray, isTrue);
+  });
+
+  test('saves and loads the update preferences', () async {
+    final store = AppPreferencesStore(file: file);
+    const preferences = AppPreferences(
+      updateChannel: ReleaseChannel.preview,
+      updateManifestUrl: 'https://example.com/manifest.json',
+      autoCheckUpdates: false,
+    );
+
+    await store.save(preferences);
+
+    final loaded = AppPreferencesStore(file: file).load();
+    expect(loaded.updateChannel, ReleaseChannel.preview);
+    expect(
+      loaded.updateManifestUrl,
+      'https://example.com/manifest.json',
+    );
+    expect(loaded.autoCheckUpdates, isFalse);
+  });
+
+  test('copyWith can clear the update manifest URL', () {
+    const preferences = AppPreferences(
+      updateManifestUrl: 'https://example.com/manifest.json',
+    );
+
+    final cleared = preferences.copyWith(updateManifestUrl: null);
+    final unchanged = preferences.copyWith(updateChannel: ReleaseChannel.preview);
+
+    expect(cleared.updateManifestUrl, isNull);
+    expect(unchanged.updateManifestUrl, preferences.updateManifestUrl);
+  });
+
+  test('defaults unknown update values safely', () async {
+    await file.parent.create(recursive: true);
+    await file.writeAsString(
+      '{"updateChannel": "nightly", "updateManifestUrl": 42, '
+      '"autoCheckUpdates": "yes"}',
+    );
+
+    final preferences = AppPreferencesStore(file: file).load();
+
+    expect(preferences.updateChannel, AppInfo.channel);
+    expect(preferences.updateManifestUrl, isNull);
+    expect(preferences.autoCheckUpdates, isTrue);
   });
 }

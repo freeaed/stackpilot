@@ -1,7 +1,9 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:stackpilot/core/bundled_payload.dart';
 import 'package:stackpilot/core/component_catalog.dart';
 import 'package:stackpilot/core/ini.dart';
 import 'package:stackpilot/core/stack_bootstrap.dart';
@@ -399,5 +401,56 @@ DocumentRoot "C:/Apache24/htdocs"
     await provisioner.install(release);
 
     expect(config.readAsStringSync(), contains('maxmemory 64mb'));
+  });
+
+  test('installs a bundled archive without contacting the network', () async {
+    final release = ComponentCatalog.php;
+    final payloadDirectory = Directory(p.join(temp.path, 'payload'))
+      ..createSync(recursive: true);
+    File(
+      p.join(payloadDirectory.path, 'php.zip'),
+    ).writeAsStringSync('bundled php archive');
+    File(p.join(payloadDirectory.path, BundledPayload.manifestName))
+        .writeAsStringSync(
+          jsonEncode({
+            'schema': 1,
+            'components': [
+              {
+                'id': release.id,
+                'file': 'php.zip',
+                'sha256': release.sha256,
+              },
+            ],
+          }),
+        );
+    final payload = BundledPayload.load(payloadDirectory)!;
+
+    final provisioner = StackProvisioner(
+      layout,
+      payload: payload,
+      download: (uri, file, onProgress) async {
+        fail('a bundled component must not be downloaded');
+      },
+      digest: (_) async => release.sha256,
+      installArchive: (component, archivePath, installName) async {
+        expect(archivePath, p.join(payloadDirectory.path, 'php.zip'));
+        return createInstall(component, installName);
+      },
+    );
+    final progress = <ProvisionProgress>[];
+
+    final result = await provisioner.install(release, onProgress: progress.add);
+
+    expect(result.install.version, release.installName);
+    expect(
+      progress.map((entry) => entry.phase),
+      isNot(contains(ProvisionPhase.downloading)),
+    );
+    expect(
+      progress.any(
+        (entry) => entry.message?.contains('bundled') ?? false,
+      ),
+      isTrue,
+    );
   });
 }

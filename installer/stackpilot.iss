@@ -4,6 +4,12 @@
 #endif
 #define AppPublisher "StackPilot"
 #define AppExeName "stackpilot.exe"
+#ifndef AppChannel
+  #define AppChannel "stable"
+#endif
+#ifndef AppNumericVersion
+  #define AppNumericVersion AppVersion
+#endif
 
 [Setup]
 AppId={{90568960-EF7E-4F8F-A47A-C9D111B78D38}
@@ -28,10 +34,10 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#AppNumericVersion}
 VersionInfoCompany={#AppPublisher}
 VersionInfoProductName={#AppName}
-VersionInfoDescription={#AppName} installer
+VersionInfoDescription={#AppName} {#AppChannel} installer
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -41,6 +47,11 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef PayloadDir
+; Optional offline payload. payload.json decides which archives are trusted;
+; the catalog checksum is verified again before anything is extracted.
+Source: "{#PayloadDir}\*"; DestDir: "{app}\payload"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"
