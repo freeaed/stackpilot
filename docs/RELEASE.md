@@ -111,7 +111,7 @@ anything.
       "notes": "Apache config fixes and faster setup.",
       "published": "2026-10-23T09:00:00Z",
       "installer": {
-        "url": "https://downloads.example.com/StackPilot-1.3.0-Setup.exe",
+        "url": "https://github.com/freeaed/stackpilot/releases/download/v1.3.0/StackPilot-1.3.0-Setup.exe",
         "sha256": "<64 lowercase hex characters>",
         "size": 48234496
       }
@@ -120,7 +120,7 @@ anything.
       "version": "1.4.0-preview.1",
       "notes": "Preview build.",
       "installer": {
-        "url": "https://downloads.example.com/StackPilot-1.4.0-preview.1-Setup.exe",
+        "url": "https://github.com/freeaed/stackpilot/releases/download/v1.4.0-preview.1/StackPilot-1.4.0-preview.1-Setup.exe",
         "sha256": "<64 lowercase hex characters>",
         "size": 48300000
       }
@@ -150,7 +150,7 @@ offline and out of the repository. Pass the public key to release builds:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tool\build_installer.ps1 `
-  -UpdateUrl https://downloads.example.com/update/manifest.json `
+  -UpdateUrl https://freeaed.github.io/stackpilot/updates/manifest.json `
   -UpdatePublicKey (Get-Content build\keys\update-public.key -Raw).Trim()
 ```
 
@@ -165,12 +165,44 @@ dart run tool\update_keys.dart sign build\update-manifest.json `
 Publish the manifest bytes exactly as signed:
 
 ```
-https://downloads.example.com/update/manifest.json
-https://downloads.example.com/update/manifest.json.sig
+https://freeaed.github.io/stackpilot/updates/manifest.json
+https://freeaed.github.io/stackpilot/updates/manifest.json.sig
 ```
 
 Do not reformat or re-encode the manifest after signing; the signature covers
 the exact bytes.
+
+## Hosting
+
+StackPilot uses two GitHub surfaces, both free and versioned with the project:
+
+| Artifact | Host | URL |
+| --- | --- | --- |
+| Installer and `SHA256SUMS.txt` | GitHub Releases | `https://github.com/freeaed/stackpilot/releases/download/<tag>/<file>` |
+| `manifest.json` and `.sig` | GitHub Pages | `https://freeaed.github.io/stackpilot/updates/manifest.json` |
+
+Release assets are per tag, so their URLs change with every release. That is
+fine for the `installer.url` inside the manifest, which is rewritten each time.
+The manifest URL is different: it is compiled into every build and must never
+change, so it lives on Pages, which serves the `gh-pages` branch.
+
+Pages is configured as *branch: `gh-pages`, folder: `/`*. The `updates/`
+folder in that branch holds exactly two files, copied byte for byte.
+
+Publishing the manifest after signing:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\publish_manifest.ps1 `
+  -ManifestPath build\update-manifest.json
+```
+
+The script refuses a manifest that is not valid JSON, is not schema `1`, or
+lists no channels. It then commits `updates/manifest.json` and
+`updates/manifest.json.sig` to `gh-pages` and pushes. Pages rebuilds in under a
+minute. Use `-SkipPush` to inspect the commit first.
+
+Because signing needs the offline private key, the manifest is published from a
+maintainer machine, never from CI.
 
 ### How an update runs
 
@@ -264,7 +296,7 @@ releases.
 4. Build and sign with the update URL and public key.
 5. Smoke-test on a clean Windows profile: install, create a stack, set up the
    starter components, start Apache/PHP/MySQL, open a site.
-6. Publish the installer, update `manifest.json`, sign it, and publish
-   `manifest.json.sig` together.
+6. Publish the installer, update `manifest.json`, sign it, and publish it with
+   `tool\publish_manifest.ps1`.
 7. Tag the commit (`vX.Y.Z` or `vX.Y.Z-preview.N`) and let CI publish the
    artifacts.
