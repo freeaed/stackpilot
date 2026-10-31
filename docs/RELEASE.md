@@ -269,6 +269,31 @@ publisher re-reads the committed files and compares their SHA-256 with the
 signed originals before pushing. Git's end-of-line conversion would otherwise
 rewrite the bytes and invalidate every signature.
 
+### Hosting the installer on Pages
+
+The updater accepts any HTTPS URL in `installer.url`, so the binary can live on
+GitHub Releases (the default) or directly on Pages. To publish it with the
+manifest:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\publish_manifest.ps1 `
+  -ManifestPath build\update-manifest.json `
+  -CatalogPath build\components.json `
+  -InstallerPath build\installer\StackPilot-1.0.0-preview.4-Setup.exe
+```
+
+The script refuses a file whose size or SHA-256 does not match a channel in the
+manifest, copies it to `downloads/<name>`, and verifies the committed bytes.
+It is published at
+`https://<user>.github.io/<repo>/downloads/<name>`.
+
+Pages limits are generous for a desktop installer: a 1 GB site and 100 MB per
+file, with roughly 100 GB/month of bandwidth (soft limits). An 11 MB installer
+is about 8,500 downloads per month. The real trade-off is repository growth:
+every binary is committed to the `gh-pages` history, so an 11 MB installer
+adds 11 MB per release forever. Use Pages when a single stable download URL
+matters; keep large or frequent builds on Releases.
+
 ## Component catalog
 
 The component pins can also live in a signed `components.json` so a moved

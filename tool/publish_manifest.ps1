@@ -23,6 +23,14 @@
     published as updates/components.json next to the update manifest.
 .PARAMETER CatalogSignaturePath
     Detached signature for the catalog. Defaults to <catalog>.sig.
+.PARAMETER InstallerPath
+    Optional installer to copy into the pages branch. It must match the
+    size/SHA-256 of one channel in the manifest, so the site can never serve a
+    binary the manifest does not describe.
+.PARAMETER InstallerName
+    File name used on the pages branch. Defaults to the installer's name.
+.PARAMETER DownloadDir
+    Folder under the pages root for installers. Defaults to downloads.
 #>
 param(
     [string]$ManifestPath = 'build\update-manifest.json',
@@ -31,6 +39,9 @@ param(
     [string]$Remote = 'origin',
     [string]$CatalogPath,
     [string]$CatalogSignaturePath,
+    [string]$InstallerPath,
+    [string]$InstallerName,
+    [string]$DownloadDir = 'downloads',
     [switch]$SkipPush
 )
 
@@ -86,6 +97,32 @@ try {
         $summary = "$summary; $($catalog.components.Count) catalog components"
     }
 
+    if ($InstallerPath) {
+        if (-not (Test-Path $InstallerPath)) {
+            throw "Not found: $InstallerPath"
+        }
+        if (-not $InstallerName) {
+            $InstallerName = Split-Path -Leaf $InstallerPath
+        }
+        if ([IO.Path]::GetFileName($InstallerName) -ne $InstallerName) {
+            throw 'InstallerName must be a plain file name, not a path.'
+        }
+        $installerHash = (Get-FileHash -Algorithm SHA256 -Path $InstallerPath).Hash.ToLowerInvariant()
+        $installerSize = (Get-Item $InstallerPath).Length
+        $matches = @($entries | Where-Object {
+                $installer = $_.Value.installer
+                $installer -and
+                $installer.sha256 -and
+                $installer.sha256.ToLowerInvariant() -eq $installerHash -and
+                [int64]$installer.size -eq [int64]$installerSize
+            })
+        if ($matches.Count -eq 0) {
+            throw "The installer does not match any channel in the manifest " +
+                "(size $installerSize, sha256 $installerHash)."
+        }
+        $summary = "$summary; installer $InstallerName"
+    }
+
     git fetch $Remote $Branch
     if ($LASTEXITCODE -ne 0) {
         throw "Could not fetch $Remote/$Branch."
@@ -105,6 +142,11 @@ try {
     if ($CatalogPath) {
         Copy-Item -Path $CatalogPath -Destination (Join-Path $updatesDir 'components.json') -Force
         Copy-Item -Path $CatalogSignaturePath -Destination (Join-Path $updatesDir 'components.json.sig') -Force
+    }
+    if ($InstallerPath) {
+        $installerDir = Join-Path $worktree $DownloadDir
+        New-Item -ItemType Directory -Force -Path $installerDir | Out-Null
+        Copy-Item -Path $InstallerPath -Destination (Join-Path $installerDir $InstallerName) -Force
     }
 
     # The signature covers exact bytes, so no end-of-line or encoding
@@ -137,6 +179,12 @@ try {
         if ($CatalogPath) {
             $pairs += @{ Source = $CatalogPath; Repo = 'updates/components.json' }
             $pairs += @{ Source = $CatalogSignaturePath; Repo = 'updates/components.json.sig' }
+        }
+        if ($InstallerPath) {
+            $pairs += @{
+                Source = $InstallerPath
+                Repo   = "$DownloadDir/$InstallerName"
+            }
         }
         foreach ($pair in $pairs) {
             $published = Join-Path $worktree $pair.Repo

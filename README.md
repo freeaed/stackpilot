@@ -298,3 +298,11 @@ show "Windows protected your PC" because it cannot verify the publisher;
 `docs/RELEASE.md` explains the certificate options and why a self-signed
 certificate does not remove that prompt.
 
+The signed updater metadata publishes to GitHub Pages with
+`tool\publish_manifest.ps1 -ManifestPath build\update-manifest.json
+-CatalogPath build\components.json`. Add
+`-InstallerPath build\installer\<file>.exe` to serve the binary from
+`https://<user>.github.io/<repo>/downloads/` as well; the script checks it
+against the manifest size and SHA-256 first. The updater accepts either a Pages
+or a Releases URL.
+
