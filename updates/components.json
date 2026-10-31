@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "generated": "2026-10-31T12:24:33.421907Z",
+  "components": [
+    {
+      "component": "php",
+      "version": "8.5.12-1",
+      "installName": "php-8.5.12-1-Win32-vs17-x64",
+      "urls": [
+        "https://windows.php.net/downloads/releases/php-8.5.12-1-Win32-vs17-x64.zip",
+        "https://windows.php.net/downloads/releases/archives/php-8.5.12-1-Win32-vs17-x64.zip"
+      ],
+      "sha256": "0dacd6484b092b5e9ae9fa3d7f96a937caf9d874eee2d980b68ed3129741144a",
+      "size": 36453069,
+      "notes": "Thread-safe build, so Apache can load PHP directly.",
+      "resolver": "php-releases-json"
+    },
+    {
+      "component": "apache",
+      "version": "2.4.69",
+      "installName": "httpd-2.4.69-261002-Win64-VS18",
+      "urls": [
+        "https://www.apachelounge.com/download/VS18/binaries/httpd-2.4.69-261002-Win64-VS18.zip"
+      ],
+      "sha256": "77d715d0d9cee731e2251e7ddc2090a7a8e6d41fedef2e9827cd918593c5a652",
+      "size": 14495691,
+      "notes": "Apache Lounge build. Needs the Microsoft Visual C++ runtime.",
+      "resolver": "apachelounge-page"
+    },
+    {
+      "component": "mysql",
+      "version": "11.4.13",
+      "installName": "mariadb-11.4.13-winx64",
+      "urls": [
+        "https://archive.mariadb.org/mariadb-11.4.13/winx64-packages/mariadb-11.4.13-winx64.zip",
+        "https://downloads.mariadb.org/rest-api/mariadb/11.4.13/mariadb-11.4.13-winx64.zip"
+      ],
+      "sha256": "d62986d433eeebfde218560b276103831604a61e929e87f1a17f5aebd80257e2",
+      "size": 95024126,
+      "product": "MariaDB",
+      "notes": "MySQL-compatible. Its data directory is initialised on install.",
+      "resolver": "mariadb-rest-api"
+    },
+    {
+      "component": "mailpit",
+      "version": "1.32.0",
+      "installName": "mailpit-1.32.0",
+      "urls": [
+        "https://github.com/axllent/mailpit/releases/download/v1.32.0/mailpit-windows-amd64.zip"
+      ],
+      "sha256": "16915767a6c95dca569336e8f561f91cf355e9a33c57b91deedcc10a4bba7fd4",
+      "size": 10632291,
+      "notes": "Catches outgoing mail at localhost:8025.",
+      "resolver": "github-release"
+    },
+    {
+      "component": "nginx",
+      "version": "1.30.6",
+      "installName": "nginx-1.30.6",
+      "urls": [
+        "https://nginx.org/download/nginx-1.30.6.zip"
+      ],
+      "sha256": "c6ee35edb0a861063323f709192ae50d1eefaf2ea7d00678bd2b22d8542dc61e",
+      "size": 2773293,
+      "notes": "Static file server with a PHP FastCGI block ready to enable.",
+      "resolver": "nginx-download-page"
+    },
+    {
+      "component": "nodejs",
+      "version": "26.13.0",
+      "installName": "node-v26.13.0-win-x64",
+      "urls": [
+        "https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-x64.zip"
+      ],
+      "sha256": "dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a",
+      "size": 41157375,
+      "notes": "Node.js LTS with npm.",
+      "resolver": "node-index-json"
+    },
+    {
+      "component": "redis",
+      "version": "5.0.14.1",
+      "installName": "redis-5.0.14.1",
+      "urls": [
+        "https://github.com/tporadowski/redis/releases/download/v5.0.14.1/Redis-x64-5.0.14.1.zip"
+      ],
+      "sha256": "018ea18a35876383cbb5f4cd0258adfc87747cf9d619bce1cf73a2e36f720ccf",
+      "size": 12617669,
+      "notes": "Community Windows port of Redis 5.0.",
+      "resolver": "github-release"
+    },
+    {
+      "component": "postgresql",
+      "version": "17.6",
+      "installName": "postgresql-17.6",
+      "urls": [
+        "https://get.enterprisedb.com/postgresql/postgresql-17.6-1-windows-x64-binaries.zip"
+      ],
+      "sha256": "d378882abd001a186735acd6f6ba716bca6ccd192e800412d4fd15ed25376b3e",
+      "size": 329891687,
+      "notes": "Binaries only. StackPilot runs initdb for this stack.",
+      "resolver": "edb-index-page"
+    }
+  ],
+  "apps": [
+    {
+      "id": "phpmyadmin",
+      "name": "phpMyAdmin",
+      "version": "5.2.3",
+      "installName": "phpmyadmin",
+      "urls": [
+        "https://files.phpmyadmin.net/phpMyAdmin/5.2.3/phpMyAdmin-5.2.3-all-languages.zip"
+      ],
+      "sha256": "2d2e13c735366d318425c78e4ee2cc8fc648d77faba3ddea2cd516e43885733f",
+      "size": 16431330,
+      "notes": "Opens at http://localhost/phpmyadmin/ after Apache restarts."
+    }
+  ]
+}
