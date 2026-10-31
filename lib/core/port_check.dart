@@ -7,6 +7,9 @@ import 'dart:io';
 /// the port, whichever interface it chose.
 typedef PortProbe = Future<bool> Function(int port);
 
+/// Returns whether something accepts TCP connections on [port].
+typedef PortOpenProbe = Future<bool> Function(int port);
+
 Future<bool> isPortFree(int port) async {
   ServerSocket? socket;
   try {
@@ -20,5 +23,21 @@ Future<bool> isPortFree(int port) async {
     } on SocketException {
       // The socket is already gone; nothing left to release.
     }
+  }
+}
+
+Future<bool> isPortOpen(int port) async {
+  Socket? socket;
+  try {
+    socket = await Socket.connect(
+      InternetAddress.loopbackIPv4,
+      port,
+      timeout: const Duration(milliseconds: 400),
+    );
+    return true;
+  } on SocketException {
+    return false;
+  } finally {
+    socket?.destroy();
   }
 }

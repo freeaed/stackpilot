@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Verify component catalog
+        run: dart run tool/verify_catalog.dart
+
       - name: Analyze
         run: flutter analyze
 
@@ -66,7 +69,9 @@ jobs:
         env:
           STACKPILOT_UPDATE_URL: ${{ vars.STACKPILOT_UPDATE_URL }}
           STACKPILOT_UPDATE_PUBLIC_KEY: ${{ vars.STACKPILOT_UPDATE_PUBLIC_KEY }}
+          STACKPILOT_COMPONENT_CATALOG_URL: ${{ vars.STACKPILOT_COMPONENT_CATALOG_URL }}
           STACKPILOT_INCLUDE_PAYLOAD: ${{ vars.STACKPILOT_INCLUDE_PAYLOAD }}
+          STACKPILOT_REQUIRE_SIGNING: ${{ vars.STACKPILOT_REQUIRE_SIGNING }}
           SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
           SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
@@ -89,8 +94,12 @@ jobs:
               '-CertificatePath', $certPath,
               '-CertificatePassword', $env:SIGNING_CERT_PASSWORD)
           }
+          elseif ($env:STACKPILOT_REQUIRE_SIGNING -eq 'true') {
+            Write-Host 'Signing is required for this repository.'
+            $buildArgs += '-RequireSigning'
+          }
           else {
-            Write-Warning 'No signing certificate secret; building an unsigned installer.'
+            Write-Warning 'No signing certificate secret; building an unsigned installer. Windows SmartScreen will show "Windows protected your PC".'
             $buildArgs += '-SkipSign'
           }
 

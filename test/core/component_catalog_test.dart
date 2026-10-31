@@ -72,17 +72,34 @@ void main() {
     expect(release.component.directoryName, 'mysql');
   });
 
+  test('every release has a mirror or a resolver', () {
+    for (final release in ComponentCatalog.releases) {
+      expect(
+        release.hasFallback,
+        isTrue,
+        reason: '${release.label} has no mirror and no resolver',
+      );
+      expect(release.urls.first, release.url, reason: release.label);
+    }
+
+    expect(ComponentCatalog.php.urls, hasLength(2));
+    expect(
+      ComponentCatalog.php.urls.last,
+      contains('/releases/archives/'),
+    );
+  });
+
   test('find resolves a release by version, folder, or id', () {
     final release = ComponentCatalog.php;
 
-    expect(ComponentCatalog.find('php', '8.5.12'), same(release));
+    expect(ComponentCatalog.find('php', '8.5.12-1'), same(release));
     expect(
-      ComponentCatalog.find('php', 'php-8.5.12-Win32-vs17-x64'),
+      ComponentCatalog.find('php', 'php-8.5.12-1-Win32-vs17-x64'),
       same(release),
     );
     expect(ComponentCatalog.byId(release.id), same(release));
     expect(ComponentCatalog.find('php', '8.4.0'), isNull);
-    expect(ComponentCatalog.find('apache', '8.5.12'), isNull);
+    expect(ComponentCatalog.find('apache', '8.5.12-1'), isNull);
   });
 
   test('missingFrom skips a component that is already installed', () {

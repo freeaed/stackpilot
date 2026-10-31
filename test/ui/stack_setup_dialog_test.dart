@@ -20,6 +20,7 @@ class _FakeProvisioner extends StackProvisioner {
     Iterable<ComponentRelease> releases, {
     void Function(ProvisionProgress)? onProgress,
     bool activate = true,
+    bool reinstall = false,
   }) async {
     calls++;
     requested = releases.toList();
@@ -107,7 +108,7 @@ void main() {
     await openDialog(tester, factory: (_) => fake);
 
     expect(find.text('Set up this stack'), findsOneWidget);
-    expect(find.text('PHP 8.5.12'), findsOneWidget);
+    expect(find.text('PHP 8.5.12-1'), findsOneWidget);
     expect(find.text('Apache 2.4.69'), findsOneWidget);
     expect(find.text('MariaDB 11.4.13'), findsOneWidget);
     expect(find.text('Mailpit 1.32.0'), findsOneWidget);
@@ -161,7 +162,7 @@ void main() {
     expect(find.text('Install 3 components'), findsOneWidget);
 
     final tile = find.ancestor(
-      of: find.text('PHP 8.5.12'),
+      of: find.text('PHP 8.5.12-1'),
       matching: find.byType(CheckboxListTile),
     );
     expect(tester.widget<CheckboxListTile>(tile).onChanged, isNull);
@@ -183,6 +184,26 @@ void main() {
     final install = find.widgetWithText(FilledButton, 'Install');
     expect(install, findsOneWidget);
     expect(tester.widget<FilledButton>(install).onPressed, isNull);
+  });
+
+  testWidgets('offers phpMyAdmin as an optional app', (tester) async {
+    tester.view.physicalSize = const Size(1100, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await openDialog(tester, factory: (_) => _FakeProvisioner(layout));
+
+    expect(find.text('Applications'), findsOneWidget);
+    expect(find.text('phpMyAdmin 5.2.3'), findsOneWidget);
+    expect(find.text('Optional'), findsOneWidget);
+
+    final tile = find.ancestor(
+      of: find.text('phpMyAdmin 5.2.3'),
+      matching: find.byType(CheckboxListTile),
+    );
+    expect(tester.widget<CheckboxListTile>(tile).value, isFalse);
+    expect(tester.widget<CheckboxListTile>(tile).onChanged, isNotNull);
   });
 
   testWidgets('shows a failure without hiding successful installs', (
@@ -213,6 +234,7 @@ class _FailingProvisioner extends StackProvisioner {
     Iterable<ComponentRelease> releases, {
     void Function(ProvisionProgress)? onProgress,
     bool activate = true,
+    bool reinstall = false,
   }) async {
     final list = releases.toList();
     return ProvisionReport(

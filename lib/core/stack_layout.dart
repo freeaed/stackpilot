@@ -226,6 +226,58 @@ class StackLayout {
   int get mailpitPort =>
       int.tryParse(config.value('mailpit', 'Port')?.trim() ?? '') ?? 8025;
 
+  int get memcachedPort =>
+      int.tryParse(config.value('memcached', 'Port')?.trim() ?? '') ?? 11211;
+
+  /// Port Apache listens on.
+  ///
+  /// The stack marker wins; Laragon stacks that never stored a port fall back
+  /// to the first `Listen` directive in their vendor config.
+  int get apachePort {
+    final configured = int.tryParse(
+      config.value('apache', 'Port')?.trim() ?? '',
+    );
+    if (configured != null) {
+      return configured;
+    }
+    return _configListenPort(StackComponent.apache, 80);
+  }
+
+  int get nginxPort {
+    final configured = int.tryParse(
+      config.value('nginx', 'Port')?.trim() ?? '',
+    );
+    if (configured != null) {
+      return configured;
+    }
+    return _configListenPort(StackComponent.nginx, 80);
+  }
+
+  int _configListenPort(StackComponent component, int fallback) {
+    final install = activeVersion(component);
+    if (install == null) {
+      return fallback;
+    }
+    final name = component == StackComponent.apache
+        ? p.join('conf', 'httpd.conf')
+        : p.join('conf', 'nginx.conf');
+    final file = File(p.join(install.directory, name));
+    final String source;
+    try {
+      if (!file.existsSync()) {
+        return fallback;
+      }
+      source = file.readAsStringSync();
+    } on FileSystemException {
+      return fallback;
+    }
+    final match = RegExp(
+      r'^[ \t]*[Ll]isten[ \t]+(?:[^:\s\r\n]+:)?(\d+)',
+      multiLine: true,
+    ).firstMatch(source);
+    return int.tryParse(match?.group(1) ?? '') ?? fallback;
+  }
+
   /// PostgreSQL binaries keep their cluster in a data folder rather than next
   /// to the version, so the first existing candidate wins.
   String get postgresqlDataDirectory {
@@ -283,15 +335,55 @@ class StackLayout {
   bool get autoVirtualHosts =>
       _isEnabled(config.value('preferences', 'AutoVirtualHosts'));
 
-  /// Folder that serves phpMyAdmin, when one is installed in the web root.
+  /// True when Apache should accept connections from other machines.
+  ///
+  /// Off by default: a development stack binds to 127.0.0.1 so a LAN peer can
+  /// never reach the databases through phpMyAdmin.
+  bool get apacheListenOnLan => _isEnabled(config.value('apache', 'ListenOnLan'));
+
+  /// Folder that serves phpMyAdmin.
+  ///
+  /// StackPilot's own installs live in `etc/apps/phpmyadmin`; an older build
+  /// or a Laragon stack may keep it in the web root. Both are recognised, and
+  /// the document root wins so existing installs keep working.
   String? get phpMyAdminDirectory {
     for (final name in const ['phpmyadmin', 'phpMyAdmin', 'pma']) {
       final candidate = p.join(documentRoot, name);
-      if (File(p.join(candidate, 'index.php')).existsSync()) {
+      if (isPhpMyAdminDirectory(candidate)) {
+        return candidate;
+      }
+    }
+    for (final name in const ['phpmyadmin', 'phpMyAdmin', 'pma']) {
+      final candidate = p.join(root, 'etc', 'apps', name);
+      if (isPhpMyAdminDirectory(candidate)) {
         return candidate;
       }
     }
     return null;
+  }
+
+  /// True when [directory] holds a complete phpMyAdmin tree.
+  ///
+  /// Windows file names are compared without case, so looking for `index.php`
+  /// also finds phpMyAdmin's own `Index.php` class inside `libraries/classes`.
+  /// That made an earlier build copy the class folder into the web root. This
+  /// check compares the real entry names instead.
+  static bool isPhpMyAdminDirectory(String directory) {
+    final root = Directory(directory);
+    if (!root.existsSync()) {
+      return false;
+    }
+    final names = <String>{};
+    try {
+      for (final entity in root.listSync(followLinks: false)) {
+        names.add(p.basename(entity.path));
+      }
+    } on FileSystemException {
+      return false;
+    }
+    return names.contains('index.php') &&
+        names.contains('libraries') &&
+        (names.contains('themes') || names.contains('templates'));
   }
 
   String? get phpMyAdminUrl {
@@ -299,7 +391,9 @@ class StackLayout {
     if (directory == null) {
       return null;
     }
-    return 'http://localhost/${Uri.encodeComponent(p.basename(directory))}/';
+    // 127.0.0.1 rather than localhost: Apache listens on IPv4 by default, and
+    // localhost can resolve to ::1 first on Windows.
+    return 'http://127.0.0.1/${Uri.encodeComponent(p.basename(directory))}/';
   }
 
   /// Absolute path to the executable that identifies [component] inside

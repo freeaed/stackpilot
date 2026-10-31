@@ -297,6 +297,17 @@ DocumentRoot "C:/Apache24/htdocs"
     );
     expect(config, contains('include conf/mime.types;'));
     expect(config, contains('fastcgi_pass 127.0.0.1:9000;'));
+    expect(config, contains('location /phpmyadmin/'));
+    expect(
+      config,
+      contains(
+        'alias "${p.join(layout.root, 'etc', 'apps', 'phpmyadmin').replaceAll('\\', '/')}/";',
+      ),
+    );
+    expect(
+      config,
+      contains('fastcgi_param SCRIPT_FILENAME \$request_filename;'),
+    );
 
     // Nginx is enabled when it is the only web server in the stack.
     final marker = IniDocument.parse(File(layout.markerPath).readAsStringSync());

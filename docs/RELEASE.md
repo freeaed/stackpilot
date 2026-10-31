@@ -46,6 +46,7 @@ with `--dart-define`:
 | `STACKPILOT_CHANNEL` | `stable` or `preview` |
 | `STACKPILOT_UPDATE_URL` | HTTPS URL of the signed update manifest |
 | `STACKPILOT_UPDATE_PUBLIC_KEY` | Base64 Ed25519 public key |
+| `STACKPILOT_COMPONENT_CATALOG_URL` | Optional HTTPS URL of the signed component catalog |
 
 A build with no update URL or no public key never checks for updates. That is
 the normal state for local development.
@@ -71,6 +72,8 @@ Useful options:
 -CertificatePath cert.pfx  sign the exe and installer
 -CertificatePassword ...   certificate password
 -SignTool C:\...\signtool.exe
+-SelfSigned                sign with a generated test certificate
+-RequireSigning            fail instead of warning when unsigned
 -SkipSign                  never sign
 ```
 
@@ -94,6 +97,56 @@ for local testing.
 
 For CI, store the PFX as base64 in the `WINDOWS_CERT_PFX_BASE64` secret and its
 password in `WINDOWS_CERT_PASSWORD`.
+
+## Windows SmartScreen and unsigned builds
+
+An installer that is not signed by a certificate Windows trusts shows
+
+> Windows protected your PC
+> Microsoft Defender SmartScreen prevented an unrecognized app from starting.
+
+until the user chooses **More info → Run anyway**. This is not a malware
+verdict: SmartScreen has no publisher information, so it cannot show who built
+the file. It affects the installer and `stackpilot.exe` alike.
+
+What removes the warning:
+
+1. **Sign with a CA-issued code-signing certificate** and timestamp it. Pass
+   `-CertificatePath`/`-CertificatePassword` (or the CI secrets) so
+   `stackpilot.exe` and the installer are both signed. Run
+   `powershell -File tool\build_installer.ps1 -RequireSigning` for a stable
+   release so an unsigned build fails instead of shipping.
+2. **Build reputation.** Standard (OV) certificates start with no reputation,
+   so SmartScreen can still warn for the first downloads until Microsoft has
+   seen enough clean installs. Extended Validation (EV) certificates are
+   treated more favourably from the first download. Microsoft Azure Trusted
+   Signing is the cheapest maintained option for a small project: it is
+   Microsoft-managed and needs a verified publisher identity, but its
+   certificates are not EV, so a brand-new publisher can still be warned
+   about until downloads accumulate.
+3. **Submit a false positive.** If Windows Defender says the file is malicious
+   (not just "unknown publisher"), send the installer to
+   <https://www.microsoft.com/en-us/wdsi/filesubmission> and keep the SHA-256
+   in the release notes while the report is reviewed.
+
+What does not help:
+
+- **A self-signed certificate.** `-SelfSigned` produces a valid signature, but
+  the certificate chain is not trusted, so SmartScreen still warns. It is only
+  useful on machines where the certificate was imported into *Trusted
+  Publishers*.
+- **Re-zipping, renaming, or rebuilding the same code.** Each new hash starts
+  without reputation.
+- **Disabling SmartScreen or Defender** on the user's machine.
+
+Every release prints its SHA-256; publish it next to the download so users can
+verify what they have before running it.
+
+The `-SelfSigned` switch is meant for internal test machines only:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool\build_installer.ps1 -SelfSigned
+```
 
 ## Update manifest
 
@@ -209,6 +262,33 @@ publisher re-reads the committed files and compares their SHA-256 with the
 signed originals before pushing. Git's end-of-line conversion would otherwise
 rewrite the bytes and invalidate every signature.
 
+## Component catalog
+
+The component pins can also live in a signed `components.json` so a moved
+vendor URL or a new digest can be fixed without shipping a new app:
+
+```powershell
+dart run tool\export_catalog.dart            # build\components.json
+dart run tool\update_keys.dart sign build\components.json
+powershell -ExecutionPolicy Bypass -File tool\publish_manifest.ps1 `
+  -ManifestPath build\update-manifest.json `
+  -CatalogPath build\components.json
+```
+
+`publish_manifest.ps1` publishes it as
+`https://freeaed.github.io/stackpilot/updates/components.json` plus `.sig`.
+Build release binaries with the same key and the catalog URL:
+
+```powershell
+-UpdatePublicKey <base64 key> `
+-ComponentCatalogUrl https://freeaed.github.io/stackpilot/updates/components.json
+```
+
+The setup wizard verifies the signature with the update key, uses the listed
+versions, and keeps the compiled-in catalog when the fetch or the signature
+fails. Run `dart run tool\verify_catalog.dart` before declaring a catalog
+good: it HEADs every primary URL and mirror and compares the sizes.
+
 ### How an update runs
 
 1. On startup (when enabled) or from **Settings → Updates**, the app fetches
@@ -282,7 +362,9 @@ Repository variables:
 | --- | --- |
 | `STACKPILOT_UPDATE_URL` | Manifest URL compiled into release builds |
 | `STACKPILOT_UPDATE_PUBLIC_KEY` | Base64 Ed25519 public key |
+| `STACKPILOT_COMPONENT_CATALOG_URL` | Signed component catalog URL compiled into release builds |
 | `STACKPILOT_INCLUDE_PAYLOAD` | `true` to build and bundle the payload |
+| `STACKPILOT_REQUIRE_SIGNING` | `true` to fail a tag build that has no signing certificate |
 
 Repository secrets:
 
@@ -293,7 +375,9 @@ Repository secrets:
 
 With no certificate secret the release job still succeeds and uploads an
 unsigned installer, which is useful for previews but not for public stable
-releases.
+releases. Set the `STACKPILOT_REQUIRE_SIGNING` repository variable to `true`
+once a certificate is in place so an unsigned tag build fails instead of
+publishing a download that SmartScreen blocks.
 
 ## Release checklist
 

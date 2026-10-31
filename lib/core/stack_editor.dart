@@ -4,6 +4,7 @@ import 'dart:math';
 import 'package:path/path.dart' as p;
 
 import 'ini.dart';
+import 'paths.dart';
 import 'stack_layout.dart';
 import 'stack_settings.dart';
 
@@ -15,6 +16,28 @@ class StackEditException implements Exception {
   @override
   String toString() => message;
 }
+
+/// URL for phpMyAdmin plus whether Apache has to reload to serve it.
+class PhpMyAdminServing {
+  const PhpMyAdminServing({required this.url, required this.changed});
+
+  final String url;
+  final bool changed;
+}
+
+/// Result of `httpd -t`.
+class ApacheConfigCheck {
+  const ApacheConfigCheck({required this.ok, required this.output});
+
+  final bool ok;
+  final String output;
+}
+
+typedef ApacheProcessRunner = Future<ProcessResult> Function(
+  String executable,
+  List<String> arguments,
+  String workingDirectory,
+);
 
 /// Writes the small set of stack files involved in changing a version or a
 /// setting. Every existing file is backed up once as `<name>.stackpilot.bak`.
@@ -65,19 +88,34 @@ class StackEditor {
     }
   }
 
-  /// Installs phpMyAdmin from a ZIP into `<document root>/phpmyadmin`.
+  /// Installs phpMyAdmin from a ZIP.
   ///
-  /// The archive is unpacked in a temporary folder so a failed download never
-  /// leaves a half-installed copy in the web root.
-  Future<String> installPhpMyAdminArchive(String archivePath) async {
+  /// By default the copy goes to `<document root>/phpmyadmin`; pass
+  /// [targetDirectory] to install it elsewhere, such as the Laragon-compatible
+  /// `<stack>/etc/apps/phpmyadmin`. The archive is unpacked in a temporary
+  /// folder so a failed download never leaves a half-installed copy behind.
+  Future<String> installPhpMyAdminArchive(
+    String archivePath, {
+    String? targetDirectory,
+  }) async {
     final archive = File(archivePath);
     if (!archive.existsSync()) {
       throw StackEditException('Archive not found: $archivePath');
     }
 
-    final target = p.join(layout.documentRoot, 'phpmyadmin');
-    if (Directory(target).existsSync()) {
-      throw StackEditException('phpMyAdmin is already installed at $target.');
+    final explicitTarget = targetDirectory?.trim() ?? '';
+    final target = explicitTarget.isEmpty
+        ? p.join(_root, 'etc', 'apps', 'phpmyadmin')
+        : normalizeWindowsPath(explicitTarget);
+    final existing = Directory(target);
+    if (existing.existsSync()) {
+      if (StackLayout.isPhpMyAdminDirectory(target)) {
+        throw StackEditException('phpMyAdmin is already installed at $target.');
+      }
+      // Earlier builds copied `libraries/classes` here because Windows matched
+      // its `Index.php`/`Sql.php` classes against `index.php`/`sql.php`. That
+      // folder can never serve phpMyAdmin, so replace it.
+      _deleteQuietly(existing);
     }
 
     final staging = Directory.systemTemp.createTempSync('stackpilot_pma_');
@@ -91,7 +129,8 @@ class StackEditor {
         );
       }
       await _copyDirectory(source, Directory(target));
-      _writePhpMyAdminConfig(target);
+      _writePhpMyAdminConfig(target, force: true);
+      _writePhpMyAdminAlias(target);
       return target;
     } finally {
       _deleteQuietly(staging);
@@ -136,16 +175,19 @@ class StackEditor {
     ];
     while (queue.isNotEmpty) {
       final current = queue.removeAt(0);
-      final looksLikePhpMyAdmin =
-          File(p.join(current.directory.path, 'index.php')).existsSync() &&
-          File(p.join(current.directory.path, 'sql.php')).existsSync();
-      if (looksLikePhpMyAdmin) {
+      if (StackLayout.isPhpMyAdminDirectory(current.directory.path)) {
         return current.directory;
       }
       if (current.depth >= 3) {
         continue;
       }
-      for (final entry in current.directory.listSync(followLinks: false)) {
+      List<FileSystemEntity> entries;
+      try {
+        entries = current.directory.listSync(followLinks: false);
+      } on FileSystemException {
+        continue;
+      }
+      for (final entry in entries) {
         if (entry is Directory) {
           queue.add((directory: entry, depth: current.depth + 1));
         }
@@ -154,12 +196,22 @@ class StackEditor {
     return null;
   }
 
-  /// Writes a Laragon-style config with an empty root password when the
-  /// archive does not ship one.
-  void _writePhpMyAdminConfig(String directory) {
+  /// Writes a Laragon-style config that connects as root with no password.
+  ///
+  /// Rewrites the file when the configured MySQL port changed; returns whether
+  /// anything was written.
+  bool _writePhpMyAdminConfig(String directory, {bool force = false}) {
     final file = File(p.join(directory, 'config.inc.php'));
-    if (file.existsSync()) {
-      return;
+    if (file.existsSync() && !force) {
+      final existing = _readText(file) ?? '';
+      final port = RegExp(
+        r"\['port'\]\s*=\s*'(\d+)'",
+      ).firstMatch(existing)?.group(1);
+      if (port == '${layout.mysqlPort}' &&
+          existing.contains("'127.0.0.1'") &&
+          existing.contains('AllowNoPassword')) {
+        return false;
+      }
     }
 
     final random = Random.secure();
@@ -167,6 +219,7 @@ class StackEditor {
       32,
       (_) => random.nextInt(16).toRadixString(16),
     ).join();
+    file.parent.createSync(recursive: true);
     file.writeAsStringSync('''<?php
 \$cfg['blowfish_secret'] = '$secret';
 \$i = 0;
@@ -178,6 +231,184 @@ class StackEditor {
 \$cfg['Servers'][\$i]['password'] = '';
 \$cfg['Servers'][\$i]['AllowNoPassword'] = true;
 ''');
+    return true;
+  }
+
+  /// Makes sure a locally installed phpMyAdmin is served at `/phpmyadmin`.
+  ///
+  /// Ensures PHP's Apache module and the alias includes are active, refreshes
+  /// the config for the current MySQL port, and returns the URL to open plus
+  /// whether Apache has to reload. Returns null when phpMyAdmin is not
+  /// installed.
+  PhpMyAdminServing? ensurePhpMyAdminServing() {
+    final directory = layout.phpMyAdminDirectory;
+    if (directory == null) {
+      return null;
+    }
+
+    var changed = false;
+    final php = layout.activeVersion(StackComponent.php);
+    if (php != null) {
+      final moduleFile = File(p.join(_root, 'etc', 'apache2', 'mod_php.conf'));
+      final hadModule = moduleFile.existsSync();
+      try {
+        preparePhpModule(php);
+        if (!hadModule) {
+          changed = true;
+        }
+      } on StackEditException {
+        // The page still needs PHP; the caller reports the missing module.
+      }
+      if (refreshApacheConfig()) {
+        changed = true;
+      }
+    }
+    if (_writePhpMyAdminConfig(directory)) {
+      changed = true;
+    }
+    if (_writePhpMyAdminAlias(directory)) {
+      changed = true;
+    }
+    return PhpMyAdminServing(
+      url: layout.phpMyAdminUrl ?? 'http://127.0.0.1/phpmyadmin/',
+      changed: changed,
+    );
+  }
+
+  /// Runs `httpd -t` to validate the active Apache config.
+  Future<ApacheConfigCheck> verifyApacheConfig({
+    ApacheProcessRunner? run,
+  }) async {
+    final apache = layout.activeVersion(StackComponent.apache);
+    if (apache == null) {
+      return const ApacheConfigCheck(
+        ok: false,
+        output: 'Apache is not installed or has no active version.',
+      );
+    }
+    final runner = run ?? Process.run;
+    try {
+      final result = await runner(
+        apache.executablePath,
+        ['-f', p.join(apache.directory, 'conf', 'httpd.conf'), '-t'],
+        apache.directory,
+      );
+      final output = '${result.stdout}${result.stderr}'.trim();
+      return ApacheConfigCheck(
+        ok: result.exitCode == 0,
+        output: output.isEmpty
+            ? 'httpd -t exited with code ${result.exitCode}.'
+            : output,
+      );
+    } on ProcessException catch (error) {
+      return ApacheConfigCheck(
+        ok: false,
+        output: 'Could not run httpd -t: ${error.message}',
+      );
+    }
+  }
+
+  /// Points `/phpmyadmin` at [directory] through the stack's Apache alias
+  /// folder.
+  ///
+  /// Laragon ships `etc/apache2/alias/phpmyadmin.conf` mapping the URL to
+  /// `etc/apps/phpMyAdmin`. When that folder is missing the alias still wins
+  /// over the document root, and Apache answers 403 because the mapped path is
+  /// covered by no `<Directory>` block. Rewriting every alias that claims the
+  /// URL keeps `/phpmyadmin` working on both stack flavours.
+  ///
+  /// `Require all granted` is deliberate: the stack binds Apache to 127.0.0.1
+  /// by default, and `Require local` breaks when the browser reaches it
+  /// through a `.test` host or a LAN address.
+  bool _writePhpMyAdminAlias(String directory) {
+    final aliasDirectory = Directory(p.join(_root, 'etc', 'apache2', 'alias'));
+    aliasDirectory.createSync(recursive: true);
+
+    final target = _slash(directory);
+    final aliasTarget = target.endsWith('/') ? target : '$target/';
+    final contents = <String>[
+      '# StackPilot phpMyAdmin - generated, do not edit',
+      'Alias /phpmyadmin "$aliasTarget"',
+      '<Directory "$aliasTarget">',
+      '    Options FollowSymLinks',
+      '    DirectoryIndex index.php',
+      '    AllowOverride All',
+      '    Require all granted',
+      '</Directory>',
+      '',
+    ].join('\r\n');
+
+    final aliasPattern = RegExp(
+      r'^[ \t]*Alias[ \t]+/(?:phpmyadmin|pma)(?![\w.-])',
+      caseSensitive: false,
+      multiLine: true,
+    );
+
+    var changed = false;
+    var written = false;
+    List<FileSystemEntity> entries;
+    try {
+      entries = aliasDirectory.listSync(followLinks: false);
+    } on FileSystemException {
+      entries = const [];
+    }
+    for (final entity in entries) {
+      if (entity is! File || !entity.path.toLowerCase().endsWith('.conf')) {
+        continue;
+      }
+      final text = _readText(entity);
+      if (text == null || !aliasPattern.hasMatch(text)) {
+        continue;
+      }
+      if (text != contents) {
+        _writeWithBackup(entity, contents);
+        changed = true;
+      }
+      written = true;
+    }
+
+    if (!written) {
+      final file = File(p.join(aliasDirectory.path, 'phpmyadmin.conf'));
+      if (_readText(file) != contents) {
+        _writeWithBackup(file, contents);
+        changed = true;
+      }
+    }
+
+    if (_ensureApacheInclude('alias')) {
+      changed = true;
+    }
+    return changed;
+  }
+
+  /// Adds the `sites-enabled/*.conf` include when the Apache config predates
+  /// the folder, so generated virtual hosts are actually loaded.
+  void ensureApacheVhostInclude() => _ensureApacheInclude('sites-enabled');
+
+  /// Returns true when the Apache config was changed.
+  bool _ensureApacheInclude(String folder) {
+    final apache = layout.activeVersion(StackComponent.apache);
+    if (apache == null) {
+      return false;
+    }
+    final file = File(p.join(apache.directory, 'conf', 'httpd.conf'));
+    final source = _readText(file);
+    if (source == null) {
+      return false;
+    }
+    final needle = 'etc/apache2/$folder';
+    final normalized = source.toLowerCase().replaceAll('\\', '/');
+    if (normalized.contains(needle)) {
+      return false;
+    }
+    final etcPath = _slash(p.join(_root, 'etc', 'apache2'));
+    final eol = source.contains('\r\n') ? '\r\n' : '\n';
+    _writeWithBackup(
+      file,
+      '${source.trimRight()}$eol'
+      'IncludeOptional "$etcPath/$folder/*.conf"$eol',
+    );
+    return true;
   }
 
   /// Copies an already extracted version folder into `bin/<component>`.
@@ -236,7 +467,8 @@ class StackEditor {
           : preferredName?.trim().isNotEmpty == true
           ? preferredName!.trim()
           : p.basenameWithoutExtension(archive.path);
-      final name = (override != null && override.isNotEmpty) ||
+      final name =
+          (override != null && override.isNotEmpty) ||
               p.equals(source.path, extracted.path)
           ? fallback
           : p.basename(source.path);
@@ -284,8 +516,8 @@ class StackEditor {
 
   /// Applies the settings shown in the settings dialog.
   void applySettings(StackSettings settings) {
-    final documentRoot = settings.documentRoot.trim();
-    final dataDirectory = settings.dataDirectory.trim();
+    final documentRoot = normalizeWindowsPath(settings.documentRoot);
+    final dataDirectory = normalizeWindowsPath(settings.dataDirectory);
     if (documentRoot.isEmpty) {
       throw const StackEditException('Document root cannot be empty.');
     }
@@ -320,6 +552,11 @@ class StackEditor {
         )
         ..setValue('apache', 'DocumentRoot', documentRoot)
         ..setValue('apache', 'SSLEnabled', settings.apacheSsl ? '-1' : '0')
+        ..setValue(
+          'apache',
+          'ListenOnLan',
+          settings.apacheListenOnLan ? '-1' : '0',
+        )
         ..setValue('mysql', 'Port', '${settings.mysqlPort}')
         ..setValue('postgresql', 'Port', '${settings.postgresqlPort}');
 
@@ -353,6 +590,152 @@ class StackEditor {
     // rewrite it after the marker changes.
     if (layout.flavor != StackFlavor.laragon) {
       refreshApacheConfig();
+    }
+  }
+
+  /// Changes the port [component] listens on.
+  ///
+  /// MySQL and PostgreSQL go through [applySettings] so their data files and
+  /// client configs follow. The others update the stack marker plus the file
+  /// the service reads at startup. Apache vhosts on the old port are moved to
+  /// the new one.
+  Future<void> changeServicePort(StackComponent component, int port) async {
+    if (port < 1 || port > 65535) {
+      throw const StackEditException('Port must be between 1 and 65535.');
+    }
+
+    switch (component) {
+      case StackComponent.mysql:
+      case StackComponent.postgresql:
+        applySettings(
+          StackSettings.load(layout).copyWith(
+            mysqlPort: component == StackComponent.mysql ? port : null,
+            postgresqlPort: component == StackComponent.postgresql
+                ? port
+                : null,
+          ),
+        );
+      case StackComponent.apache:
+        final oldPort = layout.apachePort;
+        _writeMarkerValue('apache', 'Port', '$port');
+        _moveApachePort(oldPort, port);
+      case StackComponent.nginx:
+        final oldPort = layout.nginxPort;
+        _writeMarkerValue('nginx', 'Port', '$port');
+        _rewriteNginxPort(oldPort, port);
+      case StackComponent.redis:
+        _writeMarkerValue('redis', 'Port', '$port');
+        _rewriteRedisPort(port);
+      case StackComponent.mailpit:
+      case StackComponent.memcached:
+        _writeMarkerValue(component.directoryName, 'Port', '$port');
+      case StackComponent.php:
+      case StackComponent.nodejs:
+        throw const StackEditException('That component has no port.');
+    }
+  }
+
+  void _writeMarkerValue(String section, String key, String value) {
+    for (final file in _markerTargets) {
+      final source = _readText(file);
+      if (source == null) {
+        continue;
+      }
+      final editor = IniEditor.parse(source)..setValue(section, key, value);
+      _writeWithBackup(file, editor.serialize());
+    }
+  }
+
+  /// Rewrites Apache's Listen lines and any vhost on [oldPort].
+  void _moveApachePort(int oldPort, int newPort) {
+    // The editor re-detects the marker, so the template and the Laragon patch
+    // both pick up the new port and bind address.
+    refreshApacheConfig();
+
+    final directory = Directory(p.join(_root, 'etc', 'apache2', 'sites-enabled'));
+    List<FileSystemEntity> entries;
+    try {
+      entries = directory.existsSync()
+          ? directory.listSync(followLinks: false)
+          : const [];
+    } on FileSystemException {
+      entries = const [];
+    }
+    final virtualHost = RegExp(
+      r'(<VirtualHost[ \t]+[^:>\s]+:)(\d+)',
+      caseSensitive: false,
+    );
+    for (final entry in entries) {
+      if (entry is! File || !entry.path.toLowerCase().endsWith('.conf')) {
+        continue;
+      }
+      final source = _readText(entry);
+      if (source == null) {
+        continue;
+      }
+      final updated = source.replaceAllMapped(virtualHost, (match) {
+        return match.group(2) == '$oldPort'
+            ? '${match.group(1)}$newPort'
+            : match.group(0)!;
+      });
+      if (updated != source) {
+        _writeWithBackup(entry, updated);
+      }
+    }
+  }
+
+  void _rewriteNginxPort(int oldPort, int newPort) {
+    final install = layout.activeVersion(StackComponent.nginx);
+    if (install == null) {
+      return;
+    }
+    final file = File(p.join(install.directory, 'conf', 'nginx.conf'));
+    final source = _readText(file);
+    if (source == null) {
+      return;
+    }
+    final pattern = RegExp(
+      r'^([ \t]*listen[ \t]+)(?:[^;\r\n:]+:)?(\d+)',
+      caseSensitive: false,
+      multiLine: true,
+    );
+    final updated = source.replaceAllMapped(pattern, (match) {
+      return match.group(2) == '$oldPort'
+          ? '${match.group(1)}$newPort'
+          : match.group(0)!;
+    });
+    if (updated != source) {
+      _writeWithBackup(file, updated);
+    }
+  }
+
+  void _rewriteRedisPort(int port) {
+    final install = layout.activeVersion(StackComponent.redis);
+    if (install == null) {
+      return;
+    }
+    final file = File(p.join(install.directory, 'redis.conf'));
+    final source = _readText(file);
+    if (source == null) {
+      return;
+    }
+    final updated = source.replaceAllMapped(
+      RegExp(
+        r'^([ \t]*port[ \t]*=[ \t]*)(\d+)',
+        caseSensitive: false,
+        multiLine: true,
+      ),
+      (match) => '${match.group(1)}$port',
+    ).replaceAllMapped(
+      RegExp(
+        r'^([ \t]*port[ \t]+)(\d+)($)',
+        caseSensitive: false,
+        multiLine: true,
+      ),
+      (match) => '${match.group(1)}$port',
+    );
+    if (updated != source) {
+      _writeWithBackup(file, updated);
     }
   }
 
@@ -393,16 +776,21 @@ class StackEditor {
   ///
   /// Provisioning calls this after `mod_php.conf` is created, so an Apache
   /// version installed before PHP still gains the include.
-  void refreshApacheConfig() {
+  ///
+  /// Returns true when the Apache config changed.
+  bool refreshApacheConfig() {
     final current = StackLayout.detect(_root);
     if (current == null) {
-      return;
+      return false;
     }
     final apache = current.activeVersion(StackComponent.apache);
     if (apache == null) {
-      return;
+      return false;
     }
+    final file = File(p.join(apache.directory, 'conf', 'httpd.conf'));
+    final before = _readText(file);
     StackEditor(current)._prepareApacheConfig(apache);
+    return _readText(file) != before;
   }
 
   /// Rewrites [install]'s Apache config for this stack.
@@ -752,6 +1140,10 @@ class StackEditor {
       r'^[ \t]*ServerName[ \t]',
       caseSensitive: false,
     );
+    final listenPattern = RegExp(
+      r'^([ \t]*)Listen[ \t]+(.+)$',
+      caseSensitive: false,
+    );
     final hasServerName = lines.any(serverNamePattern.hasMatch);
     final directoryPattern = RegExp(
       r'^([ \t]*<Directory[ \t]+)"([^"]*)"(.*)$',
@@ -775,6 +1167,18 @@ class StackEditor {
       if (scriptAliasPattern.hasMatch(line)) {
         updated.add('ScriptAlias /cgi-bin/ "$installPath/cgi-bin/"');
         continue;
+      }
+      final listenMatch = listenPattern.firstMatch(line);
+      if (listenMatch != null) {
+        final rewritten = _rewriteListen(
+          listenMatch.group(2)!.trim(),
+          layout.apachePort,
+          onLan: layout.apacheListenOnLan,
+        );
+        if (rewritten != null) {
+          updated.add('${listenMatch.group(1)}Listen $rewritten');
+          continue;
+        }
       }
 
       final directoryMatch = directoryPattern.firstMatch(line);
@@ -903,7 +1307,9 @@ class StackEditor {
       '# The Apache Lounge original is kept as httpd.conf.vendor.',
       '',
       'ServerRoot "$installPath"',
-      'Listen 80',
+      layout.apacheListenOnLan
+          ? 'Listen ${layout.apachePort}'
+          : 'Listen 127.0.0.1:${layout.apachePort}',
       'ServerName localhost',
       'ServerAdmin admin@localhost',
       '',
@@ -989,7 +1395,7 @@ class StackEditor {
     } else if (sslEnabled && sslModule) {
       lines.addAll([
         '',
-        'Listen 443',
+        layout.apacheListenOnLan ? 'Listen 443' : 'Listen 127.0.0.1:443',
         '<IfModule ssl_module>',
         '    SSLRandomSeed startup builtin',
         '    SSLRandomSeed connect builtin',
@@ -1094,6 +1500,34 @@ class StackEditor {
 
   static String _slash(String value) => value.replaceAll('\\', '/');
 
+  /// Rewrites a `Listen` argument to the stack port and bind address.
+  ///
+  /// An explicit non-loopback host (for example a named interface) is left
+  /// alone. Returns null when the line should not be touched.
+  static String? _rewriteListen(
+    String value,
+    int port, {
+    required bool onLan,
+  }) {
+    final argument = value.split(RegExp(r'\s+')).first;
+    final portMatch = RegExp(r'(\d+)$').firstMatch(argument);
+    if (portMatch == null) {
+      return null;
+    }
+    final host = argument
+        .substring(0, argument.length - portMatch.group(1)!.length)
+        .replaceAll(':', '')
+        .replaceAll('[', '')
+        .replaceAll(']', '')
+        .trim();
+    final wildcard =
+        host.isEmpty || host == '*' || host == '0.0.0.0' || host == '::';
+    if (!wildcard && host != '127.0.0.1' && host != 'localhost') {
+      return null;
+    }
+    return onLan ? '$port' : '127.0.0.1:$port';
+  }
+
   static String _unquote(String value) {
     var result = value.trim();
     if (result.length >= 2 && result.startsWith('"') && result.endsWith('"')) {
@@ -1167,24 +1601,53 @@ class StackEditor {
   void _updateLauncher(StackComponent component, StackInstall install) {
     if (layout.flavor == StackFlavor.laragon) {
       _patchLaragonLauncher(component, install);
-      return;
+    } else {
+      _writeNativeLauncher(component, install);
     }
-    _writeNativeLauncher(component, install);
+    _writePowerShellLauncher();
   }
 
-  /// Rewrites `bin/stackpilot.cmd` for a StackPilot-owned stack.
+  /// Makes sure the stack launcher exists and reflects the active versions.
   ///
-  /// The script prepends the active binaries to `PATH`, so a terminal started
-  /// through it can run `php`, `mysql`, `node`, and friends without the user
-  /// setting up PATH by hand. It is regenerated on every version change, so it
-  /// always mirrors `usr/profile/default.ini`.
-  void _writeNativeLauncher(StackComponent component, StackInstall install) {
-    final active = <StackComponent, StackInstall?>{
-      for (final candidate in StackComponent.values)
-        candidate: layout.activeVersion(candidate),
-    };
-    active[component] = install;
+  /// Returns the `.cmd` path. A terminal started through it has `php`, `mysql`,
+  /// `node`, and the other active binaries on `PATH`.
+  String ensureLauncher() {
+    if (layout.flavor == StackFlavor.laragon) {
+      final file = File(_launcherPath);
+      if (file.existsSync()) {
+        // Laragon keeps this file under its own control; only refresh the
+        // PowerShell companion.
+        _writePowerShellLauncher();
+        return file.path;
+      }
+    }
+    _writeLauncherFile(_activeInstalls());
+    _writePowerShellLauncher();
+    return _launcherPath;
+  }
 
+  /// Path of the PowerShell companion launcher (`. <path>` sets PATH).
+  String get powerShellLauncherPath {
+    final directory = p.dirname(_launcherPath);
+    final name = layout.flavor == StackFlavor.laragon
+        ? 'laragon.ps1'
+        : 'stackpilot.ps1';
+    return p.join(directory, name);
+  }
+
+  Map<StackComponent, StackInstall?> _activeInstalls() {
+    // Re-read the profile: the layout passed to the editor can predate a
+    // version change made in the same run.
+    final current = StackLayout.detect(_root) ?? layout;
+    return {
+      for (final component in StackComponent.values)
+        component: current.activeVersion(component),
+    };
+  }
+
+  List<String> _launcherEntries(
+    Map<StackComponent, StackInstall?> active,
+  ) {
     final entries = <String>[];
     for (final candidate in _launcherOrder) {
       final current = active[candidate];
@@ -1197,7 +1660,11 @@ class StackEditor {
             : current.directory,
       );
     }
+    return entries;
+  }
 
+  void _writeLauncherFile(Map<StackComponent, StackInstall?> active) {
+    final entries = _launcherEntries(active);
     final apache = active[StackComponent.apache];
     final openssl = apache == null
         ? null
@@ -1216,14 +1683,48 @@ class StackEditor {
       ')',
       '',
     ];
-    final contents = lines.join('\r\n');
-
     final file = File(_launcherPath);
-    if (_readText(file) == contents) {
-      return;
-    }
     file.parent.createSync(recursive: true);
-    file.writeAsStringSync(contents);
+    final contents = lines.join('\r\n');
+    if (_readText(file) != contents) {
+      file.writeAsStringSync(contents);
+    }
+  }
+
+  /// Writes the PowerShell launcher used by the PowerShell terminal option.
+  void _writePowerShellLauncher() {
+    final active = _activeInstalls();
+    final entries = _launcherEntries(active);
+    final apache = active[StackComponent.apache];
+    final openssl = apache == null
+        ? null
+        : File(p.join(apache.directory, 'conf', 'openssl.cnf'));
+    final lines = [
+      '# Generated by StackPilot. Dot-source this file to load the stack.',
+      "\$env:STACKPILOT_ROOT = '${_psQuote(_root)}'",
+      "\$env:PATH = '${_psQuote(entries.join(';'))};' + \$env:PATH",
+      if (openssl != null && openssl.existsSync())
+        "\$env:OPENSSL_CONF = '${_psQuote(openssl.path)}'",
+      '',
+    ];
+    final file = File(powerShellLauncherPath);
+    file.parent.createSync(recursive: true);
+    final contents = lines.join('\r\n');
+    if (_readText(file) != contents) {
+      file.writeAsStringSync(contents);
+    }
+  }
+
+  /// Rewrites `bin/stackpilot.cmd` for a StackPilot-owned stack.
+  ///
+  /// The script prepends the active binaries to `PATH`, so a terminal started
+  /// through it can run `php`, `mysql`, `node`, and friends without the user
+  /// setting up PATH by hand. It is regenerated on every version change, so it
+  /// always mirrors `usr/profile/default.ini`.
+  void _writeNativeLauncher(StackComponent component, StackInstall install) {
+    final active = _activeInstalls();
+    active[component] = install;
+    _writeLauncherFile(active);
   }
 
   /// Order in which components are added to the launcher `PATH`.

@@ -81,6 +81,63 @@ void main() {
       ),
     );
   });
+
+  test('ensureLauncher recreates the launchers from the active versions', () {
+    StackEditor(layout).selectVersion(StackComponent.php, php83);
+    final launcher = File(p.join(layout.root, 'bin', 'stackpilot.cmd'));
+    final script = File(p.join(layout.root, 'bin', 'stackpilot.ps1'));
+    launcher.deleteSync();
+    if (script.existsSync()) {
+      script.deleteSync();
+    }
+
+    final path = StackEditor(layout).ensureLauncher();
+
+    expect(path, launcher.path);
+    expect(launcher.existsSync(), isTrue);
+    expect(launcher.readAsStringSync(), contains(php83.directory));
+
+    expect(script.existsSync(), isTrue);
+    final contents = script.readAsStringSync();
+    expect(contents, contains(r'$env:PATH'));
+    expect(contents, contains(php83.directory));
+    expect(contents, contains(r'$env:STACKPILOT_ROOT'));
+  });
+
+  test('ensureLauncher keeps a Laragon launcher and adds a PowerShell one', () {
+    final root = p.join(temp.path, 'laragon');
+    File(p.join(root, 'usr', 'laragon.ini')).createSync(recursive: true);
+    Directory(p.join(root, 'bin')).createSync(recursive: true);
+    final vendor = File(p.join(root, 'bin', 'laragon', 'laragon.cmd'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync('SET "PATH=C:\\laragon\\bin\\php;%PATH%"\r\n');
+    final laragon = StackLayout.detect(root)!;
+    final editor = StackEditor(laragon);
+
+    final path = editor.ensureLauncher();
+
+    expect(path, vendor.path);
+    expect(vendor.readAsStringSync(), contains(r'C:\laragon'));
+    expect(
+      editor.powerShellLauncherPath,
+      p.join(root, 'bin', 'laragon', 'laragon.ps1'),
+    );
+    expect(File(editor.powerShellLauncherPath).existsSync(), isTrue);
+  });
+
+  test('ensureLauncher creates one when a Laragon stack has none', () {
+    final root = p.join(temp.path, 'laragon-empty');
+    File(p.join(root, 'usr', 'laragon.ini')).createSync(recursive: true);
+    Directory(p.join(root, 'bin')).createSync(recursive: true);
+    final laragon = StackLayout.detect(root)!;
+    final editor = StackEditor(laragon);
+
+    final path = editor.ensureLauncher();
+
+    expect(path, p.join(root, 'bin', 'laragon', 'laragon.cmd'));
+    expect(File(path).readAsStringSync(), contains('@echo off'));
+    expect(File(editor.powerShellLauncherPath).existsSync(), isTrue);
+  });
 }
 
 StackInstall _install(

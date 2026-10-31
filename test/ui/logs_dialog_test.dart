@@ -83,6 +83,43 @@ void main() {
     expect(find.text('Service logs'), findsNothing);
   });
 
+  testWidgets('filters lines by search text and level', (tester) async {
+    File(
+      p.join(root, r'bin\apache\httpd-2.4.66\logs\error.log'),
+    )
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        '[core] ready\n'
+        '[php] PHP Fatal error: something broke\n'
+        '[core] Warning: a warning\n',
+      );
+
+    await openDialog(tester, StackLayout.detect(root)!);
+
+    await tester.enterText(find.byType(TextField), 'ready');
+    await tester.pump();
+
+    var viewer = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('service-log-text')),
+    );
+    expect(viewer.data, contains('ready'));
+    expect(viewer.data, isNot(contains('Fatal error')));
+
+    await tester.enterText(find.byType(TextField), '');
+    await tester.pump();
+    await tester.tap(find.text('All lines'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Errors').last);
+    await tester.pumpAndSettle();
+
+    viewer = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('service-log-text')),
+    );
+    expect(viewer.data, contains('Fatal error'));
+    expect(viewer.data, isNot(contains('Warning: a warning')));
+    expect(find.textContaining('1 of 3 lines'), findsOneWidget);
+  });
+
   testWidgets('explains when a service has not written a log yet', (
     tester,
   ) async {

@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'app_log.dart';
+import 'service_console.dart';
 import 'service_processes.dart';
 import 'port_check.dart' as ports;
 import 'stack_layout.dart';
@@ -12,6 +14,33 @@ import 'windows_job.dart';
 abstract class RunningProcess {
   int get pid;
   Future<int> get exitCode;
+}
+
+/// A process whose stdout and stderr StackPilot can capture.
+abstract class RunningProcessWithOutput implements RunningProcess {
+  Stream<List<int>> get stdout;
+  Stream<List<int>> get stderr;
+}
+
+/// A service that exited shortly after it was started.
+class ServiceExit {
+  const ServiceExit({
+    required this.component,
+    required this.exitCode,
+    required this.after,
+    required this.recentLines,
+    required this.unexpected,
+  });
+
+  final StackComponent component;
+  final int exitCode;
+  final Duration after;
+
+  /// Last lines captured from the service's console, oldest first.
+  final List<String> recentLines;
+
+  /// True when the exit happened within the manager's early-exit window.
+  final bool unexpected;
 }
 
 typedef StartProcess = Future<RunningProcess> Function(
@@ -29,10 +58,18 @@ typedef KillProcessTree = Future<void> Function(int pid);
 
 typedef AdoptProcess = bool Function(int pid);
 
+typedef ServiceExitHandler = void Function(ServiceExit exit);
+
 class ServiceException implements Exception {
-  const ServiceException(this.message);
+  const ServiceException(this.message, {this.port, this.component});
 
   final String message;
+
+  /// Port that could not be used, when the failure is a port conflict.
+  final int? port;
+
+  /// Service the failure belongs to, when known.
+  final StackComponent? component;
 
   @override
   String toString() => message;
@@ -64,13 +101,21 @@ class ServiceManager {
     ProcessInspector? inspector,
     AdoptProcess? adoptProcess,
     ports.PortProbe? isPortFree,
-    this.stopTimeout = const Duration(seconds: 8),
+    ports.PortOpenProbe? isPortOpen,
+    ServiceConsole? console,
+    this.stopTimeout = const Duration(seconds: 10),
+    this.earlyExitThreshold = const Duration(seconds: 5),
+    this.startupTimeout = const Duration(seconds: 10),
+    this.stabilityWindow = const Duration(seconds: 3),
+    this.verifyStart = true,
   }) : _layout = layout,
        _startProcess = startProcess ?? _defaultStart,
        _runProcess = runProcess ?? _defaultRun,
        _killProcessTree = killProcessTree ?? _defaultKillTree,
        _inspector = inspector ?? const WindowsProcessInspector(),
        _adoptProcess = adoptProcess ?? _defaultAdopt,
+       _console = console ?? ServiceConsole(layout.root),
+       _isPortOpen = isPortOpen ?? ports.isPortOpen,
        _isPortFree = isPortFree ?? ports.isPortFree;
 
   static const _startOrder = [
@@ -96,16 +141,48 @@ class ServiceManager {
   };
 
   final Duration stopTimeout;
+
+  /// How soon after a start an exit is reported as a crash.
+  final Duration earlyExitThreshold;
+
+  /// How long to wait for a service to accept connections after starting.
+  final Duration startupTimeout;
+
+  /// How long the process has to stay alive after the port opens.
+  final Duration stabilityWindow;
+
+  /// Set false in tests that use fake processes without real sockets.
+  final bool verifyStart;
   final StartProcess _startProcess;
   final RunProcess _runProcess;
   final KillProcessTree _killProcessTree;
   final ProcessInspector _inspector;
   final AdoptProcess _adoptProcess;
   final ports.PortProbe _isPortFree;
+  final ports.PortOpenProbe _isPortOpen;
+  final ServiceConsole _console;
+
+  /// Called when a service started by StackPilot exits on its own.
+  ServiceExitHandler? onServiceExit;
 
   StackLayout _layout;
   final Map<StackComponent, _OwnedService> _owned = {};
   final Map<StackComponent, _ExternalService> _external = {};
+
+  /// Processes StackPilot asked to stop, so their exit is not reported as a
+  /// crash.
+  final Set<int> _expectedExits = {};
+
+  /// PIDs whose exit future has already completed.
+  final Set<int> _exitedPids = {};
+
+  /// Incremented on every start so a late exit handler does not detach the
+  /// console of a newer run.
+  final Map<StackComponent, int> _consoleRuns = {};
+
+  /// Recent console output for a service, oldest first.
+  List<String> recentOutput(StackComponent component, [int lines = 20]) =>
+      _console.recentLines(component, lines);
 
   StackLayout get layout => _layout;
 
@@ -187,10 +264,13 @@ class ServiceManager {
         '${_labels[component]} cannot start because port $port is already '
         'in use by another program. Stop it and try again, or choose a '
         'different port in Settings.',
+        port: port,
+        component: component,
       );
     }
 
     final command = _startCommand(install);
+    final started = DateTime.now();
     final process = await _startProcess(
       command.executable,
       command.arguments,
@@ -199,14 +279,125 @@ class ServiceManager {
     _owned[component] = _OwnedService(process: process, install: install);
     _adoptProcess(process.pid);
 
+    final run = (_consoleRuns[component] ?? 0) + 1;
+    _consoleRuns[component] = run;
+    if (process is RunningProcessWithOutput) {
+      try {
+        _console.attach(
+          component,
+          stdout: process.stdout,
+          stderr: process.stderr,
+        );
+      } on Object catch (error) {
+        AppLog.warn('Could not capture ${_labels[component]} output: $error');
+        unawaited(process.stdout.drain<void>());
+        unawaited(process.stderr.drain<void>());
+      }
+    }
+
     unawaited(
-      process.exitCode.then((_) {
+      process.exitCode.then((code) {
+        _exitedPids.add(process.pid);
         final owned = _owned[component];
         if (owned != null && identical(owned.process, process)) {
           _owned.remove(component);
         }
+        final expected = _expectedExits.remove(process.pid);
+        if (_consoleRuns[component] == run) {
+          unawaited(_console.detach(component));
+        }
+
+        final after = DateTime.now().difference(started);
+        if (expected || after >= earlyExitThreshold) {
+          return;
+        }
+
+        final lines = _console.recentLines(component, 20);
+        AppLog.warn(
+          '${_labels[component]} exited ${after.inMilliseconds} ms after '
+          'starting (code $code)',
+        );
+        final handler = onServiceExit;
+        if (handler == null) {
+          return;
+        }
+        try {
+          handler(
+            ServiceExit(
+              component: component,
+              exitCode: code,
+              after: after,
+              recentLines: lines,
+              unexpected: true,
+            ),
+          );
+        } on Object catch (error, stackTrace) {
+          AppLog.error(
+            'Service exit handler failed',
+            error: error,
+            stackTrace: stackTrace,
+          );
+        }
       }),
     );
+
+    if (verifyStart && port != null) {
+      final healthy = await _verifyStarted(component, process, port, started);
+      if (!healthy) {
+        final lines = _console.recentLines(component, 20);
+        _expectedExits.add(process.pid);
+        final owned = _owned[component];
+        if (owned != null && identical(owned.process, process)) {
+          _owned.remove(component);
+        }
+        if (_consoleRuns[component] == run) {
+          unawaited(_console.detach(component));
+        }
+        try {
+          await _killProcessTree(process.pid);
+        } on ProcessException {
+          // The process may already be gone.
+        }
+        throw ServiceException(
+          '${_labels[component]} did not accept connections on port $port '
+          'within ${startupTimeout.inSeconds} s.'
+          '${lines.isEmpty ? ' Open Logs for the service error.' : '\n\n${lines.join('\n')}'}',
+          port: port,
+          component: component,
+        );
+      }
+    }
+  }
+
+  /// Waits for [port] to accept connections and for the process to survive
+  /// [stabilityWindow] before reporting the service as running.
+  Future<bool> _verifyStarted(
+    StackComponent component,
+    RunningProcess process,
+    int port,
+    DateTime started,
+  ) async {
+    final deadline = DateTime.now().add(startupTimeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (_exitedPids.contains(process.pid)) {
+        return false;
+      }
+      if (await _isPortOpen(port)) {
+        final remaining =
+            stabilityWindow - DateTime.now().difference(started);
+        if (remaining > Duration.zero) {
+          try {
+            await process.exitCode.timeout(remaining);
+            return false;
+          } on TimeoutException {
+            // Still alive when the stability window elapsed.
+          }
+        }
+        return !_exitedPids.contains(process.pid);
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 150));
+    }
+    return false;
   }
 
   Future<List<ServiceException>> startEnabled() async {
@@ -263,6 +454,7 @@ class ServiceManager {
   }
 
   Future<void> _stopOwned(_OwnedService owned) async {
+    _expectedExits.add(owned.process.pid);
     if (await _requestStop(owned.install)) {
       if (await _waitForExit(owned.process)) {
         return;
@@ -348,15 +540,9 @@ class ServiceManager {
   int? _portFor(StackComponent component, StackInstall install) {
     switch (component) {
       case StackComponent.apache:
-        return _listenPort(
-              File(p.join(install.directory, 'conf', 'httpd.conf')),
-            ) ??
-            80;
+        return layout.apachePort;
       case StackComponent.nginx:
-        return _listenPort(
-              File(p.join(install.directory, 'conf', 'nginx.conf')),
-            ) ??
-            80;
+        return layout.nginxPort;
       case StackComponent.mysql:
         return layout.mysqlPort;
       case StackComponent.postgresql:
@@ -366,25 +552,10 @@ class ServiceManager {
       case StackComponent.mailpit:
         return layout.mailpitPort;
       case StackComponent.memcached:
+        return layout.memcachedPort;
       case StackComponent.php:
       case StackComponent.nodejs:
         return null;
-    }
-  }
-
-  /// First `Listen`/`listen` port in a server config, when it can be read.
-  static int? _listenPort(File file) {
-    try {
-      if (!file.existsSync()) {
-        return null;
-      }
-      final match = RegExp(
-        r'^[ \t]*[Ll]isten[ \t]+(?:[^:\s\r\n]+:)?(\d+)',
-        multiLine: true,
-      ).firstMatch(file.readAsStringSync());
-      return int.tryParse(match?.group(1) ?? '');
-    } on FileSystemException {
-      return null;
     }
   }
 
@@ -429,10 +600,15 @@ class ServiceManager {
           workingDirectory: directory,
         );
       case StackComponent.mailpit:
+        return ServiceCommand(
+          executable: install.executablePath,
+          arguments: ['--listen', '127.0.0.1:${layout.mailpitPort}'],
+          workingDirectory: directory,
+        );
       case StackComponent.memcached:
         return ServiceCommand(
           executable: install.executablePath,
-          arguments: const [],
+          arguments: ['-p', '${layout.memcachedPort}'],
           workingDirectory: directory,
         );
       case StackComponent.php:
@@ -460,7 +636,7 @@ class ServiceManager {
       case StackComponent.nginx:
         return ServiceCommand(
           executable: install.executablePath,
-          arguments: ['-p', _prefix(directory), '-s', 'stop'],
+          arguments: ['-p', _prefix(directory), '-s', 'quit'],
           workingDirectory: directory,
         );
       case StackComponent.mysql:
@@ -521,8 +697,8 @@ class ServiceManager {
       workingDirectory: workingDirectory,
       mode: ProcessStartMode.normal,
     );
-    unawaited(process.stdout.drain<void>());
-    unawaited(process.stderr.drain<void>());
+    // The caller attaches the console capture; draining here as well would
+    // steal the bytes. A capture failure falls back to discarding the output.
     return _DartRunningProcess(process);
   }
 
@@ -565,7 +741,7 @@ class _ExternalService {
   final String executablePath;
 }
 
-class _DartRunningProcess implements RunningProcess {
+class _DartRunningProcess implements RunningProcessWithOutput {
   const _DartRunningProcess(this._process);
 
   final Process _process;
@@ -575,4 +751,10 @@ class _DartRunningProcess implements RunningProcess {
 
   @override
   Future<int> get exitCode => _process.exitCode;
+
+  @override
+  Stream<List<int>> get stdout => _process.stdout;
+
+  @override
+  Stream<List<int>> get stderr => _process.stderr;
 }

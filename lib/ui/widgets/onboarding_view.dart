@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 
 import '../windows_dialogs.dart';
 
@@ -14,6 +15,9 @@ class OnboardingView extends StatefulWidget {
     required this.defaultRoot,
     required this.onCreate,
     required this.onOpenExisting,
+    this.legacyStacks = const [],
+    this.recovering = false,
+    this.onOpenLegacy,
   });
 
   /// Folder that was inspected before this screen was shown.
@@ -29,6 +33,15 @@ class OnboardingView extends StatefulWidget {
   /// Lets the user pick an existing stack folder. Returns an error message, or
   /// null when a stack was opened or the picker was cancelled.
   final Future<String?> Function() onOpenExisting;
+
+  /// Laragon stacks found on this PC. They are only opened when the user asks.
+  final List<String> legacyStacks;
+
+  /// True when the user already finished onboarding but the stack is missing.
+  final bool recovering;
+
+  /// Opens one of [legacyStacks]. Returns an error message, or null.
+  final Future<String?> Function(String root)? onOpenLegacy;
 
   @override
   State<OnboardingView> createState() => _OnboardingViewState();
@@ -94,6 +107,25 @@ class _OnboardingViewState extends State<OnboardingView> {
     });
   }
 
+  Future<void> _openLegacy(String root) async {
+    final open = widget.onOpenLegacy;
+    if (_busy || open == null) {
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final message = await open(root);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _error = message;
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -118,21 +150,28 @@ class _OnboardingViewState extends State<OnboardingView> {
                         color: theme.colorScheme.primary,
                       ),
                       const SizedBox(width: 14),
-                      const Expanded(
+                      Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'Welcome to StackPilot',
-                              style: TextStyle(
+                              widget.recovering
+                                  ? 'Find your stack again'
+                                  : 'Welcome to StackPilot',
+                              style: const TextStyle(
                                 fontSize: 22,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
-                            SizedBox(height: 4),
+                            const SizedBox(height: 4),
                             Text(
-                              'Your local web stack, managed by StackPilot. '
-                              'No other tool is required.',
+                              widget.recovering
+                                  ? 'The stack StackPilot used last is no '
+                                        'longer at ${widget.attemptedRoot}. '
+                                        'Create a new one or open an existing '
+                                        'folder.'
+                                  : 'Your local web stack, managed by '
+                                        'StackPilot. No other tool is required.',
                             ),
                           ],
                         ),
@@ -208,6 +247,77 @@ class _OnboardingViewState extends State<OnboardingView> {
                       ),
                     ],
                   ),
+                  if (widget.legacyStacks.isNotEmpty) ...[
+                    const SizedBox(height: 18),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.fromLTRB(14, 12, 14, 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF6F2E7),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFE6DCC3)),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(
+                                Icons.inventory_2_outlined,
+                                size: 17,
+                                color: Color(0xFF7A6537),
+                              ),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  'Laragon was found on this PC',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF5C4C22),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          const Text(
+                            'StackPilot does not open it automatically. '
+                            'Import one of these folders only if you want to '
+                            'keep using it.',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Color(0xFF7A6537),
+                              height: 1.4,
+                            ),
+                          ),
+                          for (final root in widget.legacyStacks)
+                            ListTile(
+                              dense: true,
+                              contentPadding: EdgeInsets.zero,
+                              leading: const Icon(
+                                Icons.folder_outlined,
+                                size: 19,
+                                color: Color(0xFF7A6537),
+                              ),
+                              title: Text(
+                                p.basename(root),
+                                style: const TextStyle(fontSize: 13),
+                              ),
+                              subtitle: Text(
+                                root,
+                                style: const TextStyle(fontSize: 11),
+                              ),
+                              trailing: TextButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () => _openLegacy(root),
+                                child: const Text('Import'),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   const Divider(height: 1),
                   const SizedBox(height: 12),

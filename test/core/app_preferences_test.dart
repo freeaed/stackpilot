@@ -150,4 +150,55 @@ void main() {
     expect(preferences.updateManifestUrl, isNull);
     expect(preferences.autoCheckUpdates, isTrue);
   });
+
+  test('reads the choices the installer wrote', () async {
+    await file.parent.create(recursive: true);
+    await file.writeAsString(
+      '{'
+      '"stacksFolder": "D:\\\\StackPilot_stacks",'
+      '"onboardingCompleted": false,'
+      '"pendingComponents": ["php", "apache", 42, " mysql "],'
+      '"pendingDownloadMode": "now"'
+      '}',
+    );
+
+    final preferences = AppPreferencesStore(file: file).load();
+
+    expect(preferences.stacksFolder, r'D:\StackPilot_stacks');
+    expect(preferences.onboardingCompleted, isFalse);
+    expect(preferences.pendingComponents, ['php', 'apache', 'mysql']);
+    expect(preferences.pendingDownloadMode, 'now');
+  });
+
+  test('clearing the pending components is saved', () async {
+    final store = AppPreferencesStore(file: file);
+    await store.save(
+      const AppPreferences(
+        pendingComponents: ['php'],
+        pendingDownloadMode: 'manual',
+      ),
+    );
+
+    final cleared = AppPreferencesStore(
+      file: file,
+    ).load().copyWith(pendingComponents: const [], pendingDownloadMode: null);
+    await store.save(cleared);
+
+    final loaded = AppPreferencesStore(file: file).load();
+    expect(loaded.pendingComponents, isEmpty);
+    expect(loaded.pendingDownloadMode, isNull);
+  });
+
+  test('saves the terminal choice and ignores unknown values', () async {
+    final store = AppPreferencesStore(file: file);
+    await store.save(const AppPreferences(terminalShell: 'powershell'));
+
+    expect(
+      AppPreferencesStore(file: file).load().terminalShell,
+      'powershell',
+    );
+
+    await file.writeAsString('{"terminalShell": "fish"}');
+    expect(AppPreferencesStore(file: file).load().terminalShell, 'auto');
+  });
 }

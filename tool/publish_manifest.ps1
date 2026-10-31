@@ -18,12 +18,19 @@
     Remote to publish to. Defaults to origin.
 .PARAMETER SkipPush
     Update the pages branch locally and stop before pushing.
+.PARAMETER CatalogPath
+    Optional signed component catalog (build\components.json). It is
+    published as updates/components.json next to the update manifest.
+.PARAMETER CatalogSignaturePath
+    Detached signature for the catalog. Defaults to <catalog>.sig.
 #>
 param(
     [string]$ManifestPath = 'build\update-manifest.json',
     [string]$SignaturePath,
     [string]$Branch = 'gh-pages',
     [string]$Remote = 'origin',
+    [string]$CatalogPath,
+    [string]$CatalogSignaturePath,
     [switch]$SkipPush
 )
 
@@ -57,6 +64,28 @@ try {
     }
     $summary = ($entries | ForEach-Object { "$($_.Name) $($_.Value.version)" }) -join ', '
 
+    $catalog = $null
+    if ($CatalogPath) {
+        if (-not $CatalogSignaturePath) {
+            $CatalogSignaturePath = "$CatalogPath.sig"
+        }
+        foreach ($path in @($CatalogPath, $CatalogSignaturePath)) {
+            if (-not (Test-Path $path)) {
+                throw "Not found: $path"
+            }
+        }
+        try {
+            $catalog = Get-Content -Path $CatalogPath -Raw | ConvertFrom-Json
+        }
+        catch {
+            throw 'The component catalog is not valid JSON.'
+        }
+        if ($catalog.schema -ne 1) {
+            throw 'The component catalog schema must be 1.'
+        }
+        $summary = "$summary; $($catalog.components.Count) catalog components"
+    }
+
     git fetch $Remote $Branch
     if ($LASTEXITCODE -ne 0) {
         throw "Could not fetch $Remote/$Branch."
@@ -73,6 +102,10 @@ try {
     New-Item -ItemType Directory -Force -Path $updatesDir | Out-Null
     Copy-Item -Path $ManifestPath -Destination (Join-Path $updatesDir 'manifest.json') -Force
     Copy-Item -Path $SignaturePath -Destination (Join-Path $updatesDir 'manifest.json.sig') -Force
+    if ($CatalogPath) {
+        Copy-Item -Path $CatalogPath -Destination (Join-Path $updatesDir 'components.json') -Force
+        Copy-Item -Path $CatalogSignaturePath -Destination (Join-Path $updatesDir 'components.json.sig') -Force
+    }
 
     # The signature covers exact bytes, so no end-of-line or encoding
     # conversion may happen on commit.
@@ -101,6 +134,10 @@ try {
             @{ Source = $ManifestPath; Repo = 'updates/manifest.json' },
             @{ Source = $SignaturePath; Repo = 'updates/manifest.json.sig' }
         )
+        if ($CatalogPath) {
+            $pairs += @{ Source = $CatalogPath; Repo = 'updates/components.json' }
+            $pairs += @{ Source = $CatalogSignaturePath; Repo = 'updates/components.json.sig' }
+        }
         foreach ($pair in $pairs) {
             $published = Join-Path $worktree $pair.Repo
             Remove-Item -Path $published -Force

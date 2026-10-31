@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'core/app_preferences.dart';
 import 'core/service_manager.dart';
+import 'core/stack_conflicts.dart';
 import 'core/stack_layout.dart';
 import 'ui/dashboard.dart';
 
@@ -13,6 +14,8 @@ class StackPilotApp extends StatelessWidget {
     this.serviceManagerFactory,
     this.preferences = AppPreferences.empty,
     this.preferencesStore,
+    this.importableStacks = const [],
+    this.laragonCheck,
   });
 
   final StackLayout? layout;
@@ -20,6 +23,11 @@ class StackPilotApp extends StatelessWidget {
   final ServiceManager Function(StackLayout)? serviceManagerFactory;
   final AppPreferences preferences;
   final AppPreferencesStore? preferencesStore;
+  final List<String> importableStacks;
+
+  /// Future that reports a running Laragon, started by `main` before `runApp`
+  /// so widget tests never spawn a process.
+  final Future<List<StackConflict>>? laragonCheck;
 
   @override
   Widget build(BuildContext context) {
@@ -125,6 +133,8 @@ class StackPilotApp extends StatelessWidget {
         serviceManagerFactory: serviceManagerFactory,
         preferences: preferences,
         preferencesStore: preferencesStore,
+        importableStacks: importableStacks,
+        laragonCheck: laragonCheck,
       ),
     );
   }

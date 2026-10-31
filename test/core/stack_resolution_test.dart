@@ -79,7 +79,7 @@ void main() {
   test('reports the last known location when nothing is found', () {
     final startup = resolveStartupStack(
       preferences: AppPreferences(activeStack: root),
-      fallbackCandidates: const [],
+      legacyCandidates: const [],
       defaultStacksFolder: p.join(temp.path, 'none'),
     );
 
@@ -97,7 +97,7 @@ void main() {
 
     final startup = resolveStartupStack(
       defaultStacksFolder: ownFolder,
-      fallbackCandidates: const [],
+      legacyCandidates: const [],
     );
 
     expect(startup.layout?.root, p.normalize(own));
@@ -108,12 +108,38 @@ void main() {
     final ownFolder = p.join(temp.path, 'own');
 
     final startup = resolveStartupStack(
-      fallbackCandidates: const [],
+      legacyCandidates: const [],
       defaultStacksFolder: ownFolder,
     );
 
     expect(startup.layout, isNull);
     expect(startup.attemptedRoot, ownFolder);
+  });
+
+  test('never opens a Laragon stack on its own', () {
+    createStack(root);
+    createStack(sibling);
+
+    final startup = resolveStartupStack(
+      legacyCandidates: [root, sibling],
+      defaultStacksFolder: p.join(temp.path, 'own'),
+    );
+
+    expect(startup.layout, isNull);
+    expect(startup.needsOnboarding, isTrue);
+    expect(startup.importable, [p.normalize(root), p.normalize(sibling)]);
+  });
+
+  test('offers Laragon stacks for import without preferring them', () {
+    createStack(root);
+
+    final startup = resolveStartupStack(
+      legacyCandidates: [root],
+      defaultStacksFolder: p.join(temp.path, 'own'),
+    );
+
+    expect(startup.attemptedRoot, p.join(temp.path, 'own'));
+    expect(startup.importable, [p.normalize(root)]);
   });
 
   test('reports a requested root that is not a stack', () {

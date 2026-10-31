@@ -3,6 +3,13 @@
 This file tracks the stages beyond 1.0. The current stage is **Stage 3:
 distribution and release engineering**.
 
+> **2026-10 reliability pass:** the items in Stage 2 were marked done, but a
+> real Windows machine with Laragon installed exposed gaps (automatic legacy
+> fallback, a stacks root that never changed, dead PHP/Apache download pins, an
+> empty log window, a terminal that exited instantly, and phpMyAdmin 403s).
+> `docs/FIX_PLAN.md` records the symptoms and the fixes; the list below is now
+> genuinely complete and re-verified by the test suite.
+
 ## Stage 2 — StackPilot-owned stacks
 
 **Goal:** a clean Windows machine with no Laragon installed can run StackPilot
@@ -57,8 +64,11 @@ a requirement.
       unrelated hosts lines are preserved, and an unwritable hosts file is
       reported with the exact lines to add instead of failing the configs.
 - [x] Default ports and conflict detection. Starting a service probes its port
-      (Apache/Nginx read from their config, MySQL/PostgreSQL/Redis/Mailpit from
-      the stack marker) and refuses to start with an actionable message.
+      (Apache/Nginx from their config or the stack marker, MySQL/PostgreSQL/
+      Redis/Mailpit/Memcached from the marker), waits for the port to accept
+      connections and the process to stay alive, and refuses to start with an
+      actionable message. A conflict dialog names the PID and program holding
+      the port and can move the service to another one.
 - [x] Generate Apache configs from templates instead of patching a
       vendor-supplied config. StackPilot stacks get a complete `httpd.conf`
       (module list, document root, logs, vhosts, optional SSL) and keep the
@@ -68,6 +78,37 @@ a requirement.
       `usr/stackpilot.ini` beside `usr/laragon.ini`, selects the versions
       Laragon had active, regenerates the launcher and Apache config, and keeps
       both markers in sync so Laragon can still open the folder.
+
+### 2e. Reliability pass (done)
+
+- [x] Startup never opens `C:\laragon`/`C:\laragon-wamp` on its own; onboarding
+      appears, and detected Laragon folders are an optional **Import** card.
+- [x] **Settings → Stacks** persists the stacks folder and can create, rename,
+      move, and delete stacks. Moving rewrites every generated path and keeps a
+      copy until the user confirms.
+- [x] `normalizeWindowsPath()` is used for every path that enters the app, with
+      a round-trip test that guards against dropped characters such as the
+      `D:\StackPilot_stacks` → `D:\tackPilot_stacks` bug.
+- [x] Component pins point at archives that exist again (PHP 8.5.12-1, Apache
+      Lounge 2.4.69, Node 26.13 LTS), with mirrors, a SHA-256 download cache,
+      resume/retry, proxy support, and a checksum-mismatch recovery card.
+- [x] `tool/verify_catalog.dart` HEADs every primary URL and mirror, and CI
+      runs it so a moved pin fails before a release.
+- [x] Logs read each service's configured files, capture stdout/stderr into
+      `<stack>/logs/<service>-console.log`, and offer search, level filtering,
+      clearing, and an early-exit dialog.
+- [x] Terminal opens a real console window through the generated `.cmd`/`.ps1`
+      launchers, with Command Prompt / PowerShell / Windows Terminal choices and
+      **Open terminal here** on every project row.
+- [x] phpMyAdmin installs into `etc/apps/phpmyadmin`, uses
+      `Require all granted`, binds Apache to 127.0.0.1 by default, validates
+      with `httpd -t`, restarts Apache (asking for external instances), and
+      reports the health-check status.
+- [x] nginx stacks get an equivalent `location /phpmyadmin/` block with
+      `fastcgi_pass` to php-cgi.
+
+See `docs/FIX_PLAN.md` for the full list of symptoms, causes, and acceptance
+criteria.
 
 ## Stage 3 — Distribution and release engineering
 
@@ -96,9 +137,11 @@ workflow.
 ## Stage 4 — Capability expansion
 
 - [ ] One-click app installs (WordPress, Laravel, Symfony, plain PHP).
+      phpMyAdmin is already a catalog app; the others are next.
 - [ ] Project environment switcher (per-project PHP version, Node version).
 - [ ] Database browser and import/export without phpMyAdmin.
-- [ ] Integrated terminal with the stack `PATH` preloaded.
+- [x] Integrated terminal with the stack `PATH` preloaded (Command Prompt,
+      PowerShell, or Windows Terminal, with per-project launch).
 - [ ] HTTPS: local CA, per-site certificates, trust-store installation.
 - [ ] Scheduled tasks: backup databases, rotate logs.
 

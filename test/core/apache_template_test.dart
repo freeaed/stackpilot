@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:stackpilot/core/ini.dart';
 import 'package:stackpilot/core/stack_bootstrap.dart';
 import 'package:stackpilot/core/stack_editor.dart';
 import 'package:stackpilot/core/stack_layout.dart';
@@ -69,7 +70,7 @@ void main() {
       startsWith('# StackPilot Apache configuration - generated'),
     );
     expect(contents, contains('ServerRoot "$installPath"'));
-    expect(contents, contains('Listen 80'));
+    expect(contents, contains('Listen 127.0.0.1:80'));
     expect(contents, contains('ServerName localhost'));
     expect(
       contents,
@@ -136,7 +137,7 @@ void main() {
     final rootPath = newRoot.replaceAll('\\', '/');
     expect(contents, contains('DocumentRoot "$rootPath"'));
     expect(contents, contains('<Directory "$rootPath">'));
-    expect(contents, contains('Listen 443'));
+    expect(contents, contains('Listen 127.0.0.1:443'));
     expect(contents, contains('SSLEngine on'));
     expect(
       contents,
@@ -158,5 +159,49 @@ void main() {
     ).readAsStringSync();
     expect(contents, isNot(contains('Listen 443')));
     expect(contents, isNot(contains('SSLEngine on')));
+  });
+
+  test('binds to loopback unless the stack is exposed on the LAN', () {
+    final config = File(p.join(apache.directory, 'conf', 'httpd.conf'));
+    StackEditor(layout).prepareApacheConfig(apache);
+    expect(config.readAsStringSync(), contains('Listen 127.0.0.1:80'));
+
+    final marker = File(layout.markerPath);
+    final editor = IniEditor.parse(marker.readAsStringSync())
+      ..setValue('apache', 'ListenOnLan', '-1');
+    marker.writeAsStringSync(editor.serialize());
+
+    final exposed = StackLayout.detect(layout.root)!;
+    final exposedInstall = exposed.installedVersions(
+      StackComponent.apache,
+    ).single;
+    StackEditor(exposed).prepareApacheConfig(exposedInstall);
+
+    final contents = config.readAsStringSync();
+    expect(contents, contains('Listen 80'));
+    expect(contents, isNot(contains('Listen 127.0.0.1:80')));
+  });
+
+  test('rewrites a wildcard Listen directive for a Laragon stack', () {
+    final root = p.join(temp.path, 'laragon');
+    File(p.join(root, 'usr', 'laragon.ini')).createSync(recursive: true);
+    final directory = p.join(root, 'bin', 'apache', 'httpd-2.4.69');
+    File(p.join(directory, 'bin', 'httpd.exe')).createSync(recursive: true);
+    File(p.join(directory, 'conf', 'httpd.conf'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        'ServerRoot "C:/laragon/bin/apache/httpd-2.4.69"\n'
+        'Listen *:80\n'
+        'DocumentRoot "C:/laragon/www"\n',
+      );
+
+    final laragon = StackLayout.detect(root)!;
+    final install = laragon.installedVersions(StackComponent.apache).single;
+    StackEditor(laragon).prepareApacheConfig(install);
+
+    final contents = File(
+      p.join(directory, 'conf', 'httpd.conf'),
+    ).readAsStringSync();
+    expect(contents, contains('Listen 127.0.0.1:80'));
   });
 }

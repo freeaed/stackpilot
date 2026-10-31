@@ -11,6 +11,9 @@ class ProjectsPanel extends StatelessWidget {
     required this.onOpenPath,
     required this.onOpenUrl,
     required this.onGenerate,
+    this.onAddSite,
+    this.onMapHosts,
+    this.onOpenTerminal,
   });
 
   final StackLayout layout;
@@ -18,6 +21,9 @@ class ProjectsPanel extends StatelessWidget {
   final ValueChanged<String> onOpenPath;
   final ValueChanged<String> onOpenUrl;
   final VoidCallback? onGenerate;
+  final VoidCallback? onAddSite;
+  final ValueChanged<ProjectSite>? onMapHosts;
+  final ValueChanged<ProjectSite>? onOpenTerminal;
 
   @override
   Widget build(BuildContext context) {
@@ -61,6 +67,12 @@ class ProjectsPanel extends StatelessWidget {
                     icon: const Icon(Icons.auto_fix_high, size: 19),
                     onPressed: onGenerate,
                   ),
+                ),
+              if (onAddSite != null)
+                IconButton(
+                  tooltip: 'Add site (folder, virtual host, hosts entry)',
+                  icon: const Icon(Icons.add_circle_outline, size: 20),
+                  onPressed: onAddSite,
                 ),
             ],
           ),
@@ -159,10 +171,27 @@ class ProjectsPanel extends StatelessWidget {
                     ),
                   ],
                 ),
-                trailing: IconButton(
-                  tooltip: 'Open folder',
-                  icon: const Icon(Icons.open_in_new, size: 18),
-                  onPressed: () => onOpenPath(site.directory),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (!site.hostsMapped && onMapHosts != null)
+                      IconButton(
+                        tooltip: 'Add ${site.host} to the hosts file',
+                        icon: const Icon(Icons.dns_outlined, size: 18),
+                        onPressed: () => onMapHosts!(site),
+                      ),
+                    if (onOpenTerminal != null)
+                      IconButton(
+                        tooltip: 'Open terminal here',
+                        icon: const Icon(Icons.terminal, size: 18),
+                        onPressed: () => onOpenTerminal!(site),
+                      ),
+                    IconButton(
+                      tooltip: 'Open folder',
+                      icon: const Icon(Icons.open_in_new, size: 18),
+                      onPressed: () => onOpenPath(site.directory),
+                    ),
+                  ],
                 ),
               ),
         ],

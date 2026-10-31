@@ -4,6 +4,7 @@ import 'package:flutter/material.dart'
     show
         CheckedPopupMenuItem,
         FilledButton,
+        ListTile,
         Size,
         SizedBox,
         Tab,
@@ -166,6 +167,47 @@ Version=postgresql-x64-16
     expect(find.text('Add version'), findsWidgets);
   });
 
+  testWidgets('reports a service that stopped right after starting', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    createStack();
+    final layout = StackLayout.detect(root)!;
+    final services = _FakeServiceManager(layout);
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        serviceManagerFactory: (_) => services,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    services.onServiceExit?.call(
+      ServiceExit(
+        component: StackComponent.apache,
+        exitCode: 1,
+        after: const Duration(milliseconds: 800),
+        recentLines: const ['AH00098: pid file overwritten', 'httpd.exe: done'],
+        unexpected: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Apache stopped right after starting'), findsOneWidget);
+    expect(find.textContaining('AH00098'), findsOneWidget);
+    expect(find.text('Open logs'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Close'));
+    await tester.pumpAndSettle();
+    expect(find.text('Apache stopped right after starting'), findsNothing);
+  });
+
   testWidgets('switches the active PHP version from the card', (tester) async {
     tester.view.physicalSize = const Size(1280, 900);
     tester.view.devicePixelRatio = 1.0;
@@ -312,8 +354,17 @@ Version=postgresql-x64-16
     await tester.pumpAndSettle();
 
     expect(find.text('Database tools'), findsOneWidget);
-    expect(find.text('Download and install'), findsOneWidget);
+    expect(find.text('Download phpMyAdmin 5.2.3'), findsOneWidget);
     expect(find.text('Install from ZIP…'), findsOneWidget);
+    expect(find.text('phpMyAdmin was not found in this stack.'), findsOneWidget);
+    expect(
+      tester
+          .widget<FilledButton>(
+            find.widgetWithText(FilledButton, 'Open phpMyAdmin'),
+          )
+          .onPressed,
+      isNull,
+    );
 
     await tester.tap(find.widgetWithText(TextButton, 'Close'));
     await tester.pumpAndSettle();
@@ -352,6 +403,7 @@ Version=postgresql-x64-16
     expect(find.text('All stopped'), findsOneWidget);
     expect(find.byTooltip('Rescan stack folder'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'blog.test'), findsOneWidget);
+    expect(find.byTooltip('Open terminal here'), findsNWidgets(2));
   });
 
   testWidgets('starts and stops services from the header', (tester) async {
@@ -474,6 +526,34 @@ Version=postgresql-x64-16
       find.text('No stack was found at C:\\missing-stack'),
       findsOneWidget,
     );
+  });
+
+  testWidgets('offers a detected Laragon stack as an optional import', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    root = p.join(temp.path, 'laragon-wamp');
+    createStack();
+    final legacy = StackLayout.detect(root)!;
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: null,
+        attemptedRoot: p.join(temp.path, 'own-stacks'),
+        importableStacks: [legacy.root],
+      ),
+    );
+
+    expect(find.text('Welcome to StackPilot'), findsOneWidget);
+    expect(find.text('Laragon was found on this PC'), findsOneWidget);
+    expect(find.text('laragon-wamp'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, 'Import'), findsOneWidget);
+    // Nothing is opened until the user asks for it.
+    expect(find.text('Change stack'), findsNothing);
   });
 
   testWidgets('creates a StackPilot stack from the onboarding screen', (
@@ -608,12 +688,19 @@ Version=postgresql-x64-16
     expect(find.text('other-stack'), findsOneWidget);
     expect(find.text('Current'), findsOneWidget);
 
-    final useButton = find.widgetWithText(TextButton, 'Use');
-    expect(useButton, findsOneWidget);
-    expect(tester.widget<TextButton>(useButton).onPressed, isNotNull);
-    await tester.ensureVisible(useButton);
+    final otherRow = find.ancestor(
+      of: find.text('other-stack'),
+      matching: find.byType(ListTile),
+    );
+    final openButton = find.descendant(
+      of: otherRow,
+      matching: find.widgetWithText(TextButton, 'Open'),
+    );
+    expect(openButton, findsOneWidget);
+    expect(tester.widget<TextButton>(openButton).onPressed, isNotNull);
+    await tester.ensureVisible(openButton);
     await tester.pumpAndSettle();
-    await tester.tap(useButton);
+    await tester.tap(openButton);
     await tester.pumpAndSettle();
 
     expect(find.text('Stack settings'), findsNothing);
@@ -622,6 +709,54 @@ Version=postgresql-x64-16
     expect(store.saved.last.activeStack, p.normalize(other));
     expect(store.saved.last.stacksFolder, p.normalize(temp.path));
     expect(find.textContaining('Using ${p.normalize(other)}'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('creates a new stack from the settings dialog', (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    root = p.join(temp.path, 'current-stack');
+    createStack();
+
+    final layout = StackLayout.detect(root)!;
+    final store = _FakePreferencesStore();
+
+    await tester.pumpWidget(
+      StackPilotApp(
+        layout: layout,
+        attemptedRoot: root,
+        preferences: AppPreferences(stacksFolder: temp.path),
+        preferencesStore: store,
+        serviceManagerFactory: (_) => _FakeServiceManager(layout),
+      ),
+    );
+
+    await tester.tap(find.text('Settings'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('New stack…'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.widgetWithText(TextField, 'Name'),
+      'brand-new',
+    );
+    await tester.tap(find.text('Create stack'));
+    await tester.pumpAndSettle();
+
+    final created = p.join(temp.path, 'brand-new');
+    expect(Directory(created).existsSync(), isTrue);
+    expect(store.saved.last.activeStack, p.normalize(created));
+    expect(store.saved.last.stacksFolder, p.normalize(temp.path));
+    expect(find.text('Set up this stack'), findsOneWidget);
+
+    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
+    await tester.pumpAndSettle();
+    expect(find.text('Set up this stack'), findsNothing);
 
     await tester.pumpWidget(const SizedBox());
   });

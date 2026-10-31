@@ -15,6 +15,7 @@ class DashboardHeader extends StatelessWidget {
     required this.onOpenDatabase,
     required this.onOpenLogs,
     required this.onSettings,
+    required this.onSetup,
     required this.onChangeStack,
     required this.onRescan,
   });
@@ -29,6 +30,9 @@ class DashboardHeader extends StatelessWidget {
   final VoidCallback onOpenDatabase;
   final VoidCallback onOpenLogs;
   final VoidCallback onSettings;
+
+  /// Opens the setup wizard again to install or repair components.
+  final VoidCallback onSetup;
   final VoidCallback onChangeStack;
   final VoidCallback onRescan;
 
@@ -212,6 +216,12 @@ class DashboardHeader extends StatelessWidget {
                 onPressed: onSettings,
                 tooltip:
                     'Change versions, ports, document root, and PHP settings',
+              ),
+              _HeaderAction(
+                icon: Icons.rocket_launch_outlined,
+                label: 'Setup',
+                onPressed: onSetup,
+                tooltip: 'Run setup again to install or repair components',
               ),
               _HeaderAction(
                 icon: Icons.folder_open,

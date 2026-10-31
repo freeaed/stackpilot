@@ -22,6 +22,9 @@
 .PARAMETER UpdatePublicKey
     Base64 Ed25519 public key used to verify the manifest. Defaults to
     STACKPILOT_UPDATE_PUBLIC_KEY.
+.PARAMETER ComponentCatalogUrl
+    Optional HTTPS URL of the signed component catalog. Defaults to
+    STACKPILOT_COMPONENT_CATALOG_URL. Empty uses the built-in catalog.
 .PARAMETER PayloadDir
     Folder containing payload.json and the component archives. When set, the
     payload is installed next to stackpilot.exe for offline setup.
@@ -31,6 +34,12 @@
     Password for the signing certificate.
 .PARAMETER SignTool
     Full path to signtool.exe. Defaults to PATH or the Windows SDK.
+.PARAMETER SelfSigned
+    Sign with a generated self-signed certificate. Useful for internal testing,
+    but Windows SmartScreen still warns because the publisher is unknown.
+.PARAMETER RequireSigning
+    Fail instead of warning when no certificate is available. Use this for
+    stable releases that are published to users.
 .PARAMETER SkipSign
     Build without code signing even when a certificate is available.
 #>
@@ -41,10 +50,13 @@ param(
     [string]$Channel = 'stable',
     [string]$UpdateUrl = $env:STACKPILOT_UPDATE_URL,
     [string]$UpdatePublicKey = $env:STACKPILOT_UPDATE_PUBLIC_KEY,
+    [string]$ComponentCatalogUrl = $env:STACKPILOT_COMPONENT_CATALOG_URL,
     [string]$PayloadDir,
     [string]$CertificatePath = $env:STACKPILOT_CERTIFICATE,
     [string]$CertificatePassword = $env:STACKPILOT_CERTIFICATE_PASSWORD,
     [string]$SignTool,
+    [switch]$SelfSigned,
+    [switch]$RequireSigning,
     [switch]$SkipSign
 )
 
@@ -97,6 +109,16 @@ try {
     if ($UpdatePublicKey -and -not $UpdateUrl) {
         Write-Warning 'UpdatePublicKey is set without UpdateUrl; updates stay disabled.'
     }
+    if ($ComponentCatalogUrl) {
+        $catalogUri = $null
+        if (-not [Uri]::TryCreate($ComponentCatalogUrl, [UriKind]::Absolute, [ref]$catalogUri) -or
+            $catalogUri.Scheme -ne 'https') {
+            throw 'ComponentCatalogUrl must be an absolute HTTPS URL.'
+        }
+        if (-not $UpdatePublicKey) {
+            throw 'ComponentCatalogUrl needs the update public key to verify the catalog.'
+        }
+    }
 
     $payloadFull = $null
     if ($PayloadDir) {
@@ -122,6 +144,9 @@ try {
         }
         if ($UpdatePublicKey) {
             $defines += "STACKPILOT_UPDATE_PUBLIC_KEY=$UpdatePublicKey"
+        }
+        if ($ComponentCatalogUrl) {
+            $defines += "STACKPILOT_COMPONENT_CATALOG_URL=$ComponentCatalogUrl"
         }
 
         Write-Host "Building StackPilot $Version ($Channel)..." -ForegroundColor Cyan
@@ -173,7 +198,41 @@ try {
         Write-Host "Signed $File" -ForegroundColor Green
     }
 
+    function New-SelfSignedCertificateFile {
+        $pfxPath = Join-Path $root 'build\signing\stackpilot-selfsigned.pfx'
+        if (Test-Path $pfxPath) {
+            return $pfxPath
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $pfxPath) |
+            Out-Null
+        $certificate = New-SelfSignedCertificate `
+            -Type CodeSigningCert `
+            -Subject 'CN=StackPilot Self-Signed' `
+            -FriendlyName 'StackPilot self-signed' `
+            -KeyUsage DigitalSignature `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -NotAfter (Get-Date).AddYears(2)
+        $secure = ConvertTo-SecureString -String 'stackpilot' -Force -AsPlainText
+        Export-PfxCertificate -Cert $certificate -FilePath $pfxPath `
+            -Password $secure | Out-Null
+        Write-Host "Created self-signed certificate at $pfxPath" -ForegroundColor Yellow
+        return $pfxPath
+    }
+
     $script:signTool = $null
+    if ($SelfSigned -and $CertificatePath) {
+        throw 'Use either -SelfSigned or -CertificatePath, not both.'
+    }
+    if ($SelfSigned -and -not $SkipSign) {
+        $CertificatePath = New-SelfSignedCertificateFile
+        $CertificatePassword = 'stackpilot'
+        Write-Warning 'Self-signed certificate: the signature exists, but Windows SmartScreen still shows "Windows protected your PC" because the publisher is unknown. Use a CA-issued certificate for releases.'
+    }
+
+    if ($RequireSigning -and (-not $CertificatePath -or $SkipSign)) {
+        throw 'This build requires a signing certificate. Pass -CertificatePath/-CertificatePassword or -SelfSigned, or drop -RequireSigning.'
+    }
+
     if (-not $SkipSign -and $CertificatePath) {
         if (-not (Test-Path $CertificatePath)) {
             throw "Signing certificate not found: $CertificatePath"
@@ -185,7 +244,7 @@ try {
         Invoke-SignFile $exePath
     }
     elseif (-not $SkipSign) {
-        Write-Warning 'No signing certificate supplied; stackpilot.exe and the installer will be unsigned.'
+        Write-Warning 'No signing certificate supplied; stackpilot.exe and the installer will be unsigned. Windows SmartScreen will warn about an unknown publisher. See docs/RELEASE.md.'
     }
 
     $isccCandidates = @(
@@ -250,6 +309,14 @@ Then run this script again.
     Write-Host ('  "url": "https://<host>/StackPilot-{0}-Setup.exe",' -f $Version)
     Write-Host ('  "sha256": "{0}",' -f $hash)
     Write-Host ('  "size": {0}' -f $size)
+
+    if (-not $script:signTool) {
+        Write-Warning @'
+Unsigned build: Windows SmartScreen shows "Windows protected your PC"
+because it cannot verify the publisher. Sign stable releases with a CA-issued
+certificate (or Azure Trusted Signing) before publishing. See docs/RELEASE.md.
+'@
+    }
 }
 finally {
     Pop-Location

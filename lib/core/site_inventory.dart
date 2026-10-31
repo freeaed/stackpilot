@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import 'hosts_file.dart';
 import 'stack_layout.dart';
 
 /// One project under the stack document root and its virtual-host state.
@@ -70,15 +71,11 @@ class SiteInventory {
     required List<ProjectSite> sites,
   }) : sites = List<ProjectSite>.unmodifiable(sites);
 
-  static const defaultHostsPath = r'C:\Windows\System32\drivers\etc\hosts';
-
-  static const _hostsBlockStart =
-      '# StackPilot virtual hosts - managed block, do not edit';
-  static const _hostsBlockEnd = '# End StackPilot virtual hosts';
+  static const defaultHostsPath = HostsFile.defaultPath;
 
   static SiteInventory load(StackLayout layout, {String? hostsPath}) {
     final resolvedHostsPath = hostsPath ?? defaultHostsPath;
-    final hosts = _readHosts(resolvedHostsPath);
+    final hosts = readHostsLines(resolvedHostsPath);
     final sitesDirectory = Directory(
       p.join(layout.root, 'etc', 'apache2', 'sites-enabled'),
     );
@@ -115,7 +112,7 @@ class SiteInventory {
               : _define(configText, 'ROOT'),
           configSslEnabled:
               configText?.contains(RegExp(r'<VirtualHost\s+\*:443')) ?? false,
-          hostsMapped: _hostsMapped(hosts, host),
+          hostsMapped: hostsFileMaps(hosts, host),
           sslRequested: sslRequested,
           sslAvailable: sslAvailable,
         ),
@@ -147,12 +144,18 @@ class SiteInventory {
   List<ProjectSite> get unmappedHosts =>
       sites.where((site) => !site.hostsMapped).toList();
 
+  /// Host names that still have to be added to the hosts file.
+  List<String> get pendingHosts =>
+      unmappedHosts.map((site) => site.host).toList();
+
   /// Creates only missing `auto.<host>.conf` files and, when [mapHosts] is
   /// true, adds a managed block of `127.0.0.1` entries to the hosts file.
   ///
   /// Existing config files and unrelated hosts lines are never changed. A
   /// hosts write that fails (normally an access-denied error) is reported in
   /// [VhostGenerationResult.hostsError] so the generated configs still work.
+  /// This writes the file directly; use [mapHosts] when the caller can wait for
+  /// an administrator prompt.
   VhostGenerationResult generateMissing({bool mapHosts = true}) {
     final directory = Directory(sitesEnabledDirectory);
     if (!directory.existsSync()) {
@@ -185,68 +188,39 @@ class SiteInventory {
     );
   }
 
+  /// Adds [hosts] to the managed block, asking Windows for administrator
+  /// rights when the direct write is denied.
+  ///
+  /// Use this instead of [generateMissing] from the UI: it covers the normal
+  /// case where StackPilot runs as a standard user and the hosts file is
+  /// writable only by administrators.
+  Future<HostsUpdate> mapHosts(Iterable<String> hosts) =>
+      HostsFile(hostsPath).add(hosts);
+
+  /// Adds every project host that is still missing.
+  Future<HostsUpdate> mapMissingHosts() => mapHosts(pendingHosts);
+
   /// Adds [hosts] to the managed block in the hosts file.
   ///
   /// Returns the names that were not mapped before. The block is rewritten in
   /// place so repeated runs stay stable and unrelated lines are preserved.
   List<String> _mapHosts(List<String> hosts) {
-    final file = File(hostsPath);
-    final outside = <String>[];
-    final block = <String>[];
-    var inBlock = false;
-    var hadBlock = false;
-
-    for (final line in _readHosts(hostsPath)) {
-      final trimmed = line.trim();
-      if (trimmed.toLowerCase() == _hostsBlockStart.toLowerCase()) {
-        inBlock = true;
-        hadBlock = true;
-        continue;
-      }
-      if (trimmed.toLowerCase() == _hostsBlockEnd.toLowerCase()) {
-        inBlock = false;
-        continue;
-      }
-      if (inBlock) {
-        final parts = trimmed.split(RegExp(r'\s+'));
-        for (final name in parts.skip(1)) {
-          if (name.isNotEmpty) {
-            block.add(name);
-          }
-        }
-        continue;
-      }
-      outside.add(line);
-    }
-
+    final lines = readHostsLines(hostsPath);
+    final document = HostsDocument.parse(lines);
     final added = <String>[];
     for (final host in hosts) {
-      if (block.any(
-        (existing) => existing.toLowerCase() == host.toLowerCase(),
-      )) {
+      if (document.hasHost(host) || hostsFileMaps(lines, host)) {
         continue;
       }
-      block.add(host);
       added.add(host);
     }
-    if (added.isEmpty && hadBlock) {
+    if (added.isEmpty && document.hadBlock) {
       return const [];
     }
 
-    while (outside.isNotEmpty && outside.last.trim().isEmpty) {
-      outside.removeLast();
-    }
-
-    final output = <String>[
-      ...outside,
-      if (outside.isNotEmpty) '',
-      _hostsBlockStart,
-      for (final host in block) '127.0.0.1 $host',
-      _hostsBlockEnd,
-      '',
-    ];
-    file.parent.createSync(recursive: true);
-    file.writeAsStringSync(output.join('\r\n'));
+    File(hostsPath)
+      ..parent.createSync(recursive: true)
+      ..writeAsStringSync(document.addHosts(added).render());
     return added;
   }
 
@@ -258,7 +232,7 @@ class SiteInventory {
       ..writeln('define ROOT "$root"')
       ..writeln('define SITE "${site.host}"')
       ..writeln()
-      ..writeln('<VirtualHost *:80> ')
+      ..writeln('<VirtualHost *:${layout.apachePort}> ')
       ..writeln('    DocumentRoot "\${ROOT}"')
       ..writeln('    ServerName \${SITE}')
       ..writeln('    ServerAlias *.\${SITE}')
@@ -354,37 +328,6 @@ String? _firstExisting(String directory, List<String> names) {
     }
   }
   return null;
-}
-
-List<String> _readHosts(String path) {
-  final file = File(path);
-  if (!file.existsSync()) {
-    return const [];
-  }
-  try {
-    return file.readAsLinesSync();
-  } on FileSystemException {
-    return const [];
-  }
-}
-
-bool _hostsMapped(List<String> lines, String host) {
-  for (final line in lines) {
-    final content = line.split('#').first.trim();
-    if (content.isEmpty) {
-      continue;
-    }
-    final parts = content.split(RegExp(r'\s+'));
-    if (parts.length < 2 || parts.first != '127.0.0.1') {
-      continue;
-    }
-    for (final name in parts.skip(1)) {
-      if (name.toLowerCase() == host.toLowerCase()) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
 
 bool _isEnabled(String? value) {

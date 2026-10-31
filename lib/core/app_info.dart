@@ -33,6 +33,12 @@ class AppInfo {
     'STACKPILOT_UPDATE_PUBLIC_KEY',
   );
 
+  /// HTTPS location of the signed component catalog. Empty uses the catalog
+  /// compiled into this build.
+  static const componentManifestUrl = String.fromEnvironment(
+    'STACKPILOT_COMPONENT_CATALOG_URL',
+  );
+
   static ReleaseChannel get channel => ReleaseChannel.parse(channelName);
 
   /// `1.2.0` or `1.2.0+7` when a build number is present.

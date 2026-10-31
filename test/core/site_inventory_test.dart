@@ -202,15 +202,42 @@ define SITE "blog.test"
     expect(result.hostsError, isNotNull);
     expect(
       File(
-        p.join(
-          root,
-          'etc',
-          'apache2',
-          'sites-enabled',
-          'auto.blog.test.conf',
-        ),
+        p.join(root, 'etc', 'apache2', 'sites-enabled', 'auto.blog.test.conf'),
       ).existsSync(),
       isTrue,
     );
+  });
+
+  test('maps a single manual host and reports what changed', () async {
+    createStack();
+    File(hostsPath).writeAsStringSync('127.0.0.1 localhost\r\n');
+    final layout = StackLayout.detect(root)!;
+    final inventory = SiteInventory.load(layout, hostsPath: hostsPath);
+
+    final result = await inventory.mapHosts(['manual.test']);
+    final again = await inventory.mapHosts(['manual.test']);
+
+    expect(result.written, isTrue);
+    expect(result.added, ['manual.test']);
+    expect(again.changed, isFalse);
+    expect(
+      File(hostsPath).readAsStringSync(),
+      contains('127.0.0.1 manual.test'),
+    );
+    expect(inventory.pendingHosts, containsAll(['blog.test', 'shop.test']));
+  });
+
+  test('maps all pending project hosts', () async {
+    createStack();
+    File(hostsPath).writeAsStringSync('');
+    final layout = StackLayout.detect(root)!;
+    final inventory = SiteInventory.load(layout, hostsPath: hostsPath);
+
+    final result = await inventory.mapMissingHosts();
+    final reloaded = SiteInventory.load(layout, hostsPath: hostsPath);
+
+    expect(result.written, isTrue);
+    expect(result.added, containsAll(['blog.test', 'shop.test']));
+    expect(reloaded.unmappedHosts, isEmpty);
   });
 }

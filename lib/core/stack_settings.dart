@@ -102,6 +102,7 @@ class StackSettings {
     required this.postgresqlPort,
     required this.autoVirtualHosts,
     required this.apacheSsl,
+    required this.apacheListenOnLan,
     required this.enabledServices,
     required this.php,
   });
@@ -112,6 +113,9 @@ class StackSettings {
   final int postgresqlPort;
   final bool autoVirtualHosts;
   final bool apacheSsl;
+
+  /// Bind Apache to 127.0.0.1 (false) or every interface (true).
+  final bool apacheListenOnLan;
   final Set<StackComponent> enabledServices;
   final PhpIniSettings php;
 
@@ -123,6 +127,7 @@ class StackSettings {
       postgresqlPort: layout.postgresqlPort,
       autoVirtualHosts: layout.autoVirtualHosts,
       apacheSsl: _isEnabled(layout.config.value('apache', 'SSLEnabled')),
+      apacheListenOnLan: layout.apacheListenOnLan,
       enabledServices: {
         for (final component in StackLayout.serviceComponents)
           if (layout.serviceEnabled(component)) component,
@@ -138,6 +143,7 @@ class StackSettings {
     int? postgresqlPort,
     bool? autoVirtualHosts,
     bool? apacheSsl,
+    bool? apacheListenOnLan,
     Set<StackComponent>? enabledServices,
     PhpIniSettings? php,
   }) {
@@ -148,6 +154,7 @@ class StackSettings {
       postgresqlPort: postgresqlPort ?? this.postgresqlPort,
       autoVirtualHosts: autoVirtualHosts ?? this.autoVirtualHosts,
       apacheSsl: apacheSsl ?? this.apacheSsl,
+      apacheListenOnLan: apacheListenOnLan ?? this.apacheListenOnLan,
       enabledServices: enabledServices ?? this.enabledServices,
       php: php ?? this.php,
     );

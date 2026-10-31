@@ -13,6 +13,8 @@ class ComponentRelease {
     required this.installName,
     required this.url,
     required this.sha256,
+    this.mirrors = const [],
+    this.resolver,
     this.product,
     this.sizeBytes,
     this.notes,
@@ -26,8 +28,16 @@ class ComponentRelease {
   /// Folder name created under `bin/<component>`.
   final String installName;
 
-  /// HTTPS download location of the ZIP archive.
+  /// Primary HTTPS download location of the ZIP archive.
   final String url;
+
+  /// Extra URLs tried when the primary one fails, such as the vendor's
+  /// archive folder or a CDN. Every mirror must serve the exact same bytes.
+  final List<String> mirrors;
+
+  /// Optional remote index used to look up newer builds, such as
+  /// `php-releases-json` or `node-index-json`.
+  final String? resolver;
 
   /// Lower-case hex SHA-256 of the archive.
   final String sha256;
@@ -41,6 +51,13 @@ class ComponentRelease {
 
   /// Short note shown in the setup dialog.
   final String? notes;
+
+  /// Primary URL followed by every mirror.
+  List<String> get urls => [url, ...mirrors];
+
+  /// True when a failed download has somewhere else to go, or when a remote
+  /// index can resolve the release again.
+  bool get hasFallback => urls.length > 1 || resolver != null;
 
   String get productName =>
       product ?? ComponentCatalog.productName(component);
@@ -88,20 +105,28 @@ class ComponentCatalog {
     url:
         'https://www.apachelounge.com/download/VS18/binaries/'
         'httpd-2.4.69-261002-Win64-VS18.zip',
-    sha256: '9f1f93cab9a0c6dc5e628aa640784bb30347f93fcd01b46a4c0d6b5ba76bf4e2',
-    sizeBytes: 14495714,
+    sha256: '77d715d0d9cee731e2251e7ddc2090a7a8e6d41fedef2e9827cd918593c5a652',
+    sizeBytes: 14495691,
+    resolver: 'apachelounge-page',
     notes: 'Apache Lounge build. Needs the Microsoft Visual C++ runtime.',
   );
 
   static const php = ComponentRelease(
     component: StackComponent.php,
-    version: '8.5.12',
-    installName: 'php-8.5.12-Win32-vs17-x64',
+    version: '8.5.12-1',
+    installName: 'php-8.5.12-1-Win32-vs17-x64',
     url:
         'https://windows.php.net/downloads/releases/'
-        'php-8.5.12-Win32-vs17-x64.zip',
-    sha256: '660f3ff6ccbdf60f9607ef54bdba85ee22a58d61fd3633b38a93d57fb7c3d184',
-    sizeBytes: 36446352,
+        'php-8.5.12-1-Win32-vs17-x64.zip',
+    // PHP moves a build to releases/archives/ after the next release, so the
+    // archive folder is the natural mirror for the exact same bytes.
+    mirrors: [
+      'https://windows.php.net/downloads/releases/archives/'
+          'php-8.5.12-1-Win32-vs17-x64.zip',
+    ],
+    sha256: '0dacd6484b092b5e9ae9fa3d7f96a937caf9d874eee2d980b68ed3129741144a',
+    sizeBytes: 36453069,
+    resolver: 'php-releases-json',
     notes: 'Thread-safe build, so Apache can load PHP directly.',
   );
 
@@ -113,8 +138,13 @@ class ComponentCatalog {
     url:
         'https://archive.mariadb.org/mariadb-11.4.13/winx64-packages/'
         'mariadb-11.4.13-winx64.zip',
+    mirrors: [
+      'https://downloads.mariadb.org/rest-api/mariadb/11.4.13/'
+          'mariadb-11.4.13-winx64.zip',
+    ],
     sha256: 'd62986d433eeebfde218560b276103831604a61e929e87f1a17f5aebd80257e2',
     sizeBytes: 95024126,
+    resolver: 'mariadb-rest-api',
     notes: 'MySQL-compatible. Its data directory is initialised on install.',
   );
 
@@ -125,15 +155,18 @@ class ComponentCatalog {
     url: 'https://nginx.org/download/nginx-1.30.6.zip',
     sha256: 'c6ee35edb0a861063323f709192ae50d1eefaf2ea7d00678bd2b22d8542dc61e',
     sizeBytes: 2773293,
+    resolver: 'nginx-download-page',
     notes: 'Static file server with a PHP FastCGI block ready to enable.',
   );
 
   static const nodejs = ComponentRelease(
     component: StackComponent.nodejs,
-    version: '24.22.1',
-    installName: 'node-v24.22.1-win-x64',
-    url: 'https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip',
-    sha256: 'd2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5',
+    version: '26.13.0',
+    installName: 'node-v26.13.0-win-x64',
+    url: 'https://nodejs.org/dist/v26.13.0/node-v26.13.0-win-x64.zip',
+    sha256: 'dcc60d59a0746999f99064a01c020445d54d84228c691cdbf25b49ac3b59150a',
+    sizeBytes: 41157375,
+    resolver: 'node-index-json',
     notes: 'Node.js LTS with npm.',
   );
 
@@ -146,6 +179,7 @@ class ComponentCatalog {
         'mailpit-windows-amd64.zip',
     sha256: '16915767a6c95dca569336e8f561f91cf355e9a33c57b91deedcc10a4bba7fd4',
     sizeBytes: 10632291,
+    resolver: 'github-release',
     notes: 'Catches outgoing mail at localhost:8025.',
   );
 
@@ -158,6 +192,7 @@ class ComponentCatalog {
         'Redis-x64-5.0.14.1.zip',
     sha256: '018ea18a35876383cbb5f4cd0258adfc87747cf9d619bce1cf73a2e36f720ccf',
     sizeBytes: 12617669,
+    resolver: 'github-release',
     notes: 'Community Windows port of Redis 5.0.',
   );
 
@@ -170,6 +205,7 @@ class ComponentCatalog {
         'postgresql-17.6-1-windows-x64-binaries.zip',
     sha256: 'd378882abd001a186735acd6f6ba716bca6ccd192e800412d4fd15ed25376b3e',
     sizeBytes: 329891687,
+    resolver: 'edb-index-page',
     notes: 'Binaries only. StackPilot runs initdb for this stack.',
   );
 

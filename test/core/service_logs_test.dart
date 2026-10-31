@@ -109,6 +109,128 @@ Version=redis-x64-5.0.14.1
     expect(files.single.label, 'postgresql.log');
   });
 
+  test('reads the Apache log paths from httpd.conf', () {
+    final apache = p.join(root, r'bin\apache\httpd-2.4.66');
+    final slashApache = apache.replaceAll(r'\', '/');
+    File(p.join(apache, 'conf', 'httpd.conf'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        'Define SRVROOT "$slashApache"\r\n'
+        'ServerRoot "\${SRVROOT}"\r\n'
+        'ErrorLog "logs/error_log"\r\n'
+        'CustomLog "logs/access_log" combined\r\n',
+      );
+    writeLog(r'bin\apache\httpd-2.4.66\logs\error_log', 'apache error');
+    writeLog(r'bin\apache\httpd-2.4.66\logs\access_log', 'apache access');
+
+    final files = ServiceLogs(
+      layout,
+    ).discover().where((file) => file.component == StackComponent.apache);
+
+    expect(
+      files.map((file) => p.basename(file.path)),
+      containsAll(['error_log', 'access_log']),
+    );
+  });
+
+  test('finds Laragon logs at the stack root', () {
+    final apache = p.join(root, r'bin\apache\httpd-2.4.66');
+    File(p.join(apache, 'conf', 'httpd.conf'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        'ServerRoot "${apache.replaceAll(r'\', '/')}"\r\n'
+        'ErrorLog "logs/error.log"\r\n'
+        'CustomLog "logs/access.log" common\r\n',
+      );
+    writeLog(r'logs\error_log', 'laragon error');
+    writeLog(r'logs\access_log', 'laragon access');
+
+    final paths = ServiceLogs(layout)
+        .discover()
+        .where((file) => file.component == StackComponent.apache)
+        .map((file) => p.basename(file.path));
+
+    expect(paths, containsAll(['error_log', 'access_log']));
+  });
+
+  test('reads the MySQL error log from my.ini', () {
+    final mysql = p.join(root, r'bin\mysql\mysql-8.4.3');
+    final target = p.join(root, 'logs', 'custom-mysql.err');
+    File(p.join(mysql, 'my.ini'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        '[mysqld]\r\nlog-error="${target.replaceAll(r'\', '/')}"\r\n',
+      );
+    File(target)
+      ..createSync(recursive: true)
+      ..writeAsStringSync('mysql error');
+
+    final files = ServiceLogs(
+      layout,
+    ).discover().where((file) => file.component == StackComponent.mysql);
+
+    expect(files.map((file) => file.path), contains(p.normalize(target)));
+  });
+
+  test('reads nginx, redis and PostgreSQL log settings', () {
+    final nginx = p.join(root, r'bin\nginx\nginx-1.28.2');
+    File(p.join(nginx, 'conf', 'nginx.conf'))
+      ..createSync(recursive: true)
+      ..writeAsStringSync(
+        'error_log "logs/nginx-error.log" warn;\r\n'
+        'http {\r\n'
+        '    access_log "logs/nginx-access.log";\r\n'
+        '}\r\n',
+      );
+    writeLog(r'bin\nginx\nginx-1.28.2\logs\nginx-error.log', 'nginx error');
+    writeLog(r'bin\nginx\nginx-1.28.2\logs\nginx-access.log', 'nginx access');
+
+    final redis = p.join(root, r'bin\redis\redis-x64-5.0.14.1');
+    final redisLog = p.join(root, 'logs', 'custom-redis.log');
+    File(p.join(redis, 'redis.conf')).writeAsStringSync(
+      'logfile "${redisLog.replaceAll(r'\', '/')}"\r\n',
+    );
+    File(redisLog)
+      ..createSync(recursive: true)
+      ..writeAsStringSync('redis log');
+
+    File(p.join(root, r'data\postgresql\postgresql.conf'))
+        .writeAsStringSync("log_directory = 'pg_log2'\r\n");
+    writeLog(r'data\postgresql\pg_log2\postgresql.log', 'pg log');
+
+    final files = ServiceLogs(layout).discover();
+    expect(
+      files
+          .where((file) => file.component == StackComponent.nginx)
+          .map((file) => p.basename(file.path)),
+      containsAll(['nginx-error.log', 'nginx-access.log']),
+    );
+    expect(
+      files
+          .where((file) => file.component == StackComponent.redis)
+          .map((file) => p.basename(file.path)),
+      contains('custom-redis.log'),
+    );
+    expect(
+      files
+          .where((file) => file.component == StackComponent.postgresql)
+          .map((file) => p.basename(file.path)),
+      contains('postgresql.log'),
+    );
+  });
+
+  test('lists captured console output', () {
+    writeLog(r'logs\mailpit-console.log', '[10:00:00] mailpit ready');
+
+    final files = ServiceLogs(layout).discover();
+
+    final console = files.singleWhere(
+      (file) => file.component == StackComponent.mailpit,
+    );
+    expect(console.label, 'console');
+    expect(console.path, p.join(root, 'logs', 'mailpit-console.log'));
+  });
+
   test('reads the end of a log without a trailing newline', () {
     writeLog(r'bin\apache\httpd-2.4.66\logs\error.log', 'first\nsecond\nthird');
 

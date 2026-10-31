@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:stackpilot/core/service_console.dart';
 import 'package:stackpilot/core/service_manager.dart';
 import 'package:stackpilot/core/service_processes.dart';
 import 'package:stackpilot/core/stack_layout.dart';
@@ -22,6 +24,31 @@ class _FakeProcess implements RunningProcess {
     if (!_exit.isCompleted) {
       _exit.complete(code);
     }
+  }
+}
+
+class _FakeOutputProcess extends _FakeProcess
+    implements RunningProcessWithOutput {
+  _FakeOutputProcess(super.pid);
+
+  final StreamController<List<int>> _stdout = StreamController<List<int>>();
+  final StreamController<List<int>> _stderr = StreamController<List<int>>();
+
+  @override
+  Stream<List<int>> get stdout => _stdout.stream;
+
+  @override
+  Stream<List<int>> get stderr => _stderr.stream;
+
+  void write(String line) {
+    _stdout.add(utf8.encode('$line\n'));
+  }
+
+  @override
+  void finish([int code = 0]) {
+    super.finish(code);
+    unawaited(_stdout.close());
+    unawaited(_stderr.close());
   }
 }
 
@@ -163,6 +190,7 @@ Version=node-v22
     return ServiceManager(
       layout,
       stopTimeout: stopTimeout,
+      verifyStart: false,
       isPortFree: (port) async => portFree,
       startProcess: (executable, arguments, workingDirectory) async {
         starts?.add(_StartCall(executable, arguments, workingDirectory));
@@ -471,5 +499,206 @@ Version=node-v22
       throwsA(isA<ServiceException>()),
     );
     expect(manager.isRunning(StackComponent.apache), isFalse);
+  });
+
+  test('reports a service that exits right after starting', () async {
+    final process = _FakeOutputProcess(4300);
+    final exits = <ServiceExit>[];
+    final reported = Completer<void>();
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      verifyStart: false,
+      startProcess: (_, _, _) async => process,
+      runProcess: (_, _) async => 0,
+      killProcessTree: (_) async {},
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+      earlyExitThreshold: const Duration(seconds: 2),
+    );
+    manager.onServiceExit = (exit) {
+      exits.add(exit);
+      if (!reported.isCompleted) {
+        reported.complete();
+      }
+    };
+
+    await manager.start(StackComponent.mailpit);
+    process.write('Error: port 8025 is already in use');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    process.finish(1);
+    await reported.future.timeout(const Duration(seconds: 2));
+
+    expect(exits.single.component, StackComponent.mailpit);
+    expect(exits.single.exitCode, 1);
+    expect(exits.single.unexpected, isTrue);
+    expect(
+      exits.single.recentLines.join('\n'),
+      contains('port 8025 is already in use'),
+    );
+  });
+
+  test('does not report a service StackPilot stopped', () async {
+    late _FakeProcess process;
+    var reported = false;
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      verifyStart: false,
+      startProcess: (_, _, _) async {
+        process = _FakeProcess(4400);
+        return process;
+      },
+      runProcess: (_, _) async {
+        process.finish();
+        return 0;
+      },
+      killProcessTree: (_) async {},
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+      earlyExitThreshold: const Duration(seconds: 2),
+    );
+    manager.onServiceExit = (_) => reported = true;
+
+    await manager.start(StackComponent.apache);
+    await manager.stop(StackComponent.apache);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(reported, isFalse);
+  });
+
+  test('does not report a service that ran for a while', () async {
+    final process = _FakeProcess(4500);
+    var reported = false;
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      verifyStart: false,
+      startProcess: (_, _, _) async => process,
+      runProcess: (_, _) async => 0,
+      killProcessTree: (_) async {},
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+      earlyExitThreshold: const Duration(milliseconds: 20),
+    );
+    manager.onServiceExit = (_) => reported = true;
+
+    await manager.start(StackComponent.mailpit);
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    process.finish();
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+
+    expect(reported, isFalse);
+  });
+
+  test('reports the port when it is already in use', () async {
+    final manager = createManager(portFree: false);
+
+    await expectLater(
+      manager.start(StackComponent.apache),
+      throwsA(
+        isA<ServiceException>()
+            .having((error) => error.port, 'port', 80)
+            .having((error) => error.component, 'component', StackComponent.apache),
+      ),
+    );
+  });
+
+  test('waits for the port before reporting a service as running', () async {
+    final process = _FakeProcess(4700);
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      isPortOpen: (_) async => true,
+      startupTimeout: const Duration(seconds: 1),
+      stabilityWindow: Duration.zero,
+      startProcess: (_, _, _) async => process,
+      runProcess: (_, _) async => 0,
+      killProcessTree: (_) async {},
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+    );
+
+    await manager.start(StackComponent.apache);
+
+    expect(manager.isRunning(StackComponent.apache), isTrue);
+  });
+
+  test('fails when the port never opens, with the captured output', () async {
+    late _FakeOutputProcess process;
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      isPortOpen: (_) async => false,
+      startupTimeout: const Duration(milliseconds: 120),
+      stabilityWindow: Duration.zero,
+      startProcess: (_, _, _) async {
+        process = _FakeOutputProcess(4600);
+        process.write('AH00526: bad config line');
+        return process;
+      },
+      runProcess: (_, _) async => 0,
+      killProcessTree: (_) async => process.finish(1),
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+    );
+
+    await expectLater(
+      manager.start(StackComponent.apache),
+      throwsA(
+        isA<ServiceException>()
+            .having((error) => error.port, 'port', 80)
+            .having(
+              (error) => error.message,
+              'message',
+              contains('did not accept connections'),
+            ),
+      ),
+    );
+    expect(manager.isRunning(StackComponent.apache), isFalse);
+  });
+
+  test('fails when the process exits before the port opens', () async {
+    late _FakeProcess process;
+    final manager = ServiceManager(
+      layout,
+      isPortFree: (_) async => true,
+      isPortOpen: (_) async => false,
+      startupTimeout: const Duration(seconds: 2),
+      stabilityWindow: Duration.zero,
+      startProcess: (_, _, _) async {
+        process = _FakeProcess(4800);
+        return process;
+      },
+      runProcess: (_, _) async => 0,
+      killProcessTree: (_) async {},
+      adoptProcess: (_) => true,
+      console: ServiceConsole(root),
+    );
+
+    final starting = manager.start(StackComponent.apache);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    process.finish(1);
+
+    await expectLater(starting, throwsA(isA<ServiceException>()));
+    expect(manager.isRunning(StackComponent.apache), isFalse);
+  });
+
+  test('stops nginx with -s quit', () async {
+    final runs = <_RunCall>[];
+    final processes = <_FakeProcess>[];
+    final manager = createManager(
+      runs: runs,
+      processes: processes,
+      runProcess: (_, _) async {
+        processes.single.finish();
+        return 0;
+      },
+    );
+
+    await manager.start(StackComponent.nginx);
+    await manager.stop(StackComponent.nginx);
+
+    expect(runs.single.arguments, containsAllInOrder(['-s', 'quit']));
   });
 }

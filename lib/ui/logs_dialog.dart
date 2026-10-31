@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -13,7 +14,12 @@ const _componentLabels = {
   StackComponent.mysql: 'MySQL',
   StackComponent.postgresql: 'PostgreSQL',
   StackComponent.redis: 'Redis',
+  StackComponent.php: 'PHP',
+  StackComponent.mailpit: 'Mailpit',
 };
+
+/// Which lines the viewer shows.
+enum _LogLevel { all, errors, warnings }
 
 Future<void> showServiceLogsDialog(
   BuildContext context, {
@@ -44,8 +50,20 @@ class _LogsDialogState extends State<_LogsDialog> {
   late ServiceLogTail _tail = _read();
 
   final ScrollController _scroll = ScrollController();
+  final TextEditingController _query = TextEditingController();
   Timer? _timer;
   bool _follow = true;
+  _LogLevel _level = _LogLevel.all;
+
+  static final _errorPattern = RegExp(
+    r'(?:\b(?:error|fatal|panic|critical|crit|alert|emerg|emergency|'
+    r'failed|failure|exception)\b|\[error\]|\bAH\d{5}:)',
+    caseSensitive: false,
+  );
+  static final _warningPattern = RegExp(
+    r'(?:\b(?:warn|warning|deprecated|notice)\b|\[warn\])',
+    caseSensitive: false,
+  );
 
   @override
   void initState() {
@@ -60,6 +78,7 @@ class _LogsDialogState extends State<_LogsDialog> {
   void dispose() {
     _timer?.cancel();
     _scroll.dispose();
+    _query.dispose();
     super.dispose();
   }
 
@@ -94,12 +113,23 @@ class _LogsDialogState extends State<_LogsDialog> {
     }
     selected ??= files.isEmpty ? null : files.first;
 
+    final tail = selected == null
+        ? ServiceLogTail.empty
+        : _logs.readTail(selected);
+    final unchanged =
+        selected == _selected &&
+        tail.exists == _tail.exists &&
+        tail.size == _tail.size &&
+        tail.modified == _tail.modified &&
+        files.length == _files.length;
     setState(() {
       _files = files;
       _selected = selected;
-      _tail = _read();
+      _tail = tail;
     });
-    _scrollToEnd();
+    if (!unchanged) {
+      _scrollToEnd();
+    }
   }
 
   void _select(ServiceLogFile file) {
@@ -130,6 +160,78 @@ class _LogsDialogState extends State<_LogsDialog> {
     } else {
       _stopFollowing();
     }
+  }
+
+  /// Lines matching the search box and the level filter, oldest first.
+  List<String> _visibleLines() {
+    if (_tail.text.isEmpty) {
+      return const [];
+    }
+    final query = _query.text.trim().toLowerCase();
+    final lines = _tail.text.split('\n');
+    if (query.isEmpty && _level == _LogLevel.all) {
+      return lines;
+    }
+    return [
+      for (final line in lines)
+        if (_matchesLevel(line) &&
+            (query.isEmpty || line.toLowerCase().contains(query)))
+          line,
+    ];
+  }
+
+  bool _matchesLevel(String line) => switch (_level) {
+    _LogLevel.all => true,
+    _LogLevel.errors => _errorPattern.hasMatch(line),
+    _LogLevel.warnings => _warningPattern.hasMatch(line),
+  };
+
+  bool get _filtered =>
+      _query.text.trim().isNotEmpty || _level != _LogLevel.all;
+
+  Future<void> _clearLog() async {
+    final selected = _selected;
+    if (selected == null) {
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Clear ${selected.label}?'),
+        content: Text(
+          '${selected.path}\n\nThis removes the current contents of the file. '
+          'A running service keeps writing new lines.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    try {
+      File(selected.path).writeAsStringSync('');
+      _refresh();
+      _notify('Cleared ${selected.label}.');
+    } on FileSystemException catch (error) {
+      _notify('Could not clear the log: ${error.message}');
+    }
+  }
+
+  void _notify(String message) {
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _openFolder() async {
@@ -210,6 +312,7 @@ class _LogsDialogState extends State<_LogsDialog> {
 
   Widget _logView(BuildContext context) {
     final selected = _selected;
+    final visible = _visibleLines();
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -324,6 +427,69 @@ class _LogsDialogState extends State<_LogsDialog> {
                   ],
                 ),
                 const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _query,
+                        style: const TextStyle(fontSize: 12.5),
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: 'Search lines',
+                          prefixIcon: const Icon(Icons.search, size: 18),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 9,
+                          ),
+                          suffixIcon: _query.text.isEmpty
+                              ? null
+                              : IconButton(
+                                  tooltip: 'Clear search',
+                                  icon: const Icon(Icons.close, size: 16),
+                                  onPressed: () {
+                                    _query.clear();
+                                    setState(() {});
+                                  },
+                                ),
+                        ),
+                        onChanged: (_) => setState(() {}),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    DropdownButton<_LogLevel>(
+                      value: _level,
+                      isDense: true,
+                      underline: const SizedBox.shrink(),
+                      style: const TextStyle(fontSize: 12),
+                      items: const [
+                        DropdownMenuItem(
+                          value: _LogLevel.all,
+                          child: Text('All lines'),
+                        ),
+                        DropdownMenuItem(
+                          value: _LogLevel.errors,
+                          child: Text('Errors'),
+                        ),
+                        DropdownMenuItem(
+                          value: _LogLevel.warnings,
+                          child: Text('Warnings'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) {
+                          return;
+                        }
+                        setState(() => _level = value);
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Clear this log',
+                      onPressed: _tail.exists ? _clearLog : null,
+                      icon: const Icon(Icons.delete_outline, size: 19),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 Expanded(
                   child: Container(
                     width: double.infinity,
@@ -332,13 +498,16 @@ class _LogsDialogState extends State<_LogsDialog> {
                       color: const Color(0xFF0E1A14),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: _tail.text.isEmpty
+                    child: visible.isEmpty
                         ? Center(
                             child: Text(
-                              _tail.exists
-                                  ? 'This log is empty. New lines appear here '
-                                        'when the service writes them.'
-                                  : 'This log file is no longer available.',
+                              !_tail.exists
+                                  ? 'This log file is no longer available.'
+                                  : _filtered
+                                  ? 'No line matches the search or the level '
+                                        'filter.'
+                                  : 'This log is empty. New lines appear here '
+                                        'when the service writes them.',
                               textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontSize: 12,
@@ -352,7 +521,7 @@ class _LogsDialogState extends State<_LogsDialog> {
                             child: SingleChildScrollView(
                               controller: _scroll,
                               child: SelectableText(
-                                _tail.text,
+                                visible.join('\n'),
                                 key: const ValueKey('service-log-text'),
                                 style: const TextStyle(
                                   fontFamily: 'Consolas',
@@ -402,7 +571,10 @@ class _LogsDialogState extends State<_LogsDialog> {
     if (!_tail.exists) {
       return 'The log file is missing.';
     }
+    final total = _tail.text.isEmpty ? 0 : _tail.text.split('\n').length;
+    final shown = _visibleLines().length;
     final parts = <String>[
+      _filtered ? '$shown of $total lines' : '$total lines',
       '${_formatBytes(_tail.bytesShown)} at the end of the file',
       'updated ${_formatTime(_tail.modified!)}',
       if (_tail.truncated) 'earlier lines hidden',

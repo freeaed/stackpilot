@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../core/paths.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
 import 'windows_dialogs.dart';
@@ -126,13 +127,13 @@ class _AddVersionDialogState extends State<_AddVersionDialog> {
       late final StackInstall install;
       switch (_source) {
         case _VersionSource.folder:
-          final path = _folder.text.trim();
+          final path = normalizeWindowsPath(_folder.text);
           if (path.isEmpty) {
             throw const StackEditException('Choose a version folder first.');
           }
           install = await widget.editor.importFolder(widget.component, path);
         case _VersionSource.archive:
-          final path = _archive.text.trim();
+          final path = normalizeWindowsPath(_archive.text);
           if (path.isEmpty) {
             throw const StackEditException('Choose a ZIP file first.');
           }

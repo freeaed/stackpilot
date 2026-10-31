@@ -3,31 +3,44 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../core/app_catalog.dart';
 import '../core/stack_editor.dart';
 import '../core/stack_layout.dart';
+import '../core/stack_provisioner.dart';
 import 'windows_dialogs.dart';
 
-/// Official phpMyAdmin release page and a current "all languages" archive.
+/// Official phpMyAdmin release page.
 const phpMyAdminDownloadPage = 'https://www.phpmyadmin.net/downloads/';
-const phpMyAdminArchiveUrl =
-    'https://files.phpmyadmin.net/phpMyAdmin/5.2.2/'
-    'phpMyAdmin-5.2.2-all-languages.zip';
+
+/// Result of the database dialog: the URL to open and whether Apache must be
+/// restarted so a freshly written `/phpmyadmin` alias is loaded.
+class DatabaseLaunch {
+  const DatabaseLaunch(this.url, {this.restartApache = false});
+
+  final String url;
+  final bool restartApache;
+}
 
 /// Opens the database tools dialog.
 ///
-/// Returns the URL that should be opened in the browser, or null when the
+/// Returns the page that should be opened in the browser, or null when the
 /// dialog was closed without opening anything.
-Future<String?> showDatabaseDialog(
+Future<DatabaseLaunch?> showDatabaseDialog(
   BuildContext context, {
   required StackLayout layout,
   required StackEditor editor,
   required Future<void> Function(String url) openUrl,
+  StackProvisioner Function(StackLayout layout)? provisionerFactory,
 }) {
-  return showDialog<String>(
+  return showDialog<DatabaseLaunch>(
     context: context,
     barrierDismissible: false,
-    builder: (context) =>
-        _DatabaseDialog(layout: layout, editor: editor, openUrl: openUrl),
+    builder: (context) => _DatabaseDialog(
+      layout: layout,
+      editor: editor,
+      openUrl: openUrl,
+      provisionerFactory: provisionerFactory,
+    ),
   );
 }
 
@@ -36,38 +49,76 @@ class _DatabaseDialog extends StatefulWidget {
     required this.layout,
     required this.editor,
     required this.openUrl,
+    this.provisionerFactory,
   });
 
   final StackLayout layout;
   final StackEditor editor;
   final Future<void> Function(String url) openUrl;
+  final StackProvisioner Function(StackLayout layout)? provisionerFactory;
 
   @override
   State<_DatabaseDialog> createState() => _DatabaseDialogState();
 }
 
 class _DatabaseDialogState extends State<_DatabaseDialog> {
-  final TextEditingController _url = TextEditingController(
-    text: phpMyAdminArchiveUrl,
-  );
-
   late String? _installed = widget.layout.phpMyAdminDirectory;
   bool _busy = false;
   String? _error;
   String? _status;
 
+  static final _app = AppCatalog.phpMyAdmin;
+
   @override
   void dispose() {
-    _url.dispose();
     super.dispose();
   }
 
-  String get _openUrl {
-    final directory = _installed;
-    if (directory == null) {
-      return 'http://localhost/phpmyadmin/';
+  /// A leftover folder from an older build that cannot serve phpMyAdmin.
+  bool get _needsRepair {
+    for (final candidate in [
+      p.join(widget.layout.documentRoot, 'phpmyadmin'),
+      p.join(widget.layout.root, 'etc', 'apps', 'phpmyadmin'),
+    ]) {
+      if (Directory(candidate).existsSync() &&
+          !StackLayout.isPhpMyAdminDirectory(candidate)) {
+        return true;
+      }
     }
-    return 'http://localhost/${Uri.encodeComponent(p.basename(directory))}/';
+    return false;
+  }
+
+  bool get _phpAvailable =>
+      widget.layout.activeVersion(StackComponent.php) != null;
+
+  String get _openUrl =>
+      widget.layout.phpMyAdminUrl ?? 'http://127.0.0.1/phpmyadmin/';
+
+  Future<void> _openInBrowser() async {
+    if (!_phpAvailable) {
+      _fail(
+        'Install PHP first: Apache cannot run phpMyAdmin\'s index.php '
+        'without an active PHP version.',
+      );
+      return;
+    }
+    PhpMyAdminServing? serving;
+    try {
+      serving = widget.editor.ensurePhpMyAdminServing();
+    } on FileSystemException catch (error) {
+      _fail('Could not prepare the phpMyAdmin alias: ${error.message}');
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    if (serving == null) {
+      _fail('phpMyAdmin is not installed yet.');
+      return;
+    }
+    Navigator.of(
+      context,
+    ).pop(DatabaseLaunch(serving.url, restartApache: serving.changed));
   }
 
   Future<void> _installFromArchive(String archivePath) async {
@@ -85,7 +136,7 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
       }
       setState(() {
         _installed = directory;
-        _status = 'Installed to $directory';
+        _status = _installedMessage(directory);
       });
     } on StackEditException catch (error) {
       _fail(error.message);
@@ -98,22 +149,41 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
     }
   }
 
-  Future<void> _downloadAndInstall() async {
+  /// Downloads the pinned, checksum-verified phpMyAdmin build.
+  Future<void> _downloadFromCatalog() async {
     setState(() {
       _busy = true;
       _error = null;
-      _status = 'Downloading phpMyAdmin…';
+      _status = 'Downloading ${_app.label}…';
     });
     try {
-      final directory = await widget.editor.downloadPhpMyAdmin(_url.text);
+      final provisioner =
+          widget.provisionerFactory?.call(widget.layout) ??
+          StackProvisioner(widget.layout);
+      final directory = await provisioner.installApp(
+        _app,
+        onProgress: (received, total) {
+          if (!mounted) {
+            return;
+          }
+          final fraction = total == null || total <= 0
+              ? null
+              : received / total;
+          setState(
+            () => _status =
+                'Downloading ${_app.label}'
+                '${fraction == null ? '…' : ' (${(fraction * 100).round()}%)'}',
+          );
+        },
+      );
       if (!mounted) {
         return;
       }
       setState(() {
         _installed = directory;
-        _status = 'Installed to $directory';
+        _status = _installedMessage(directory);
       });
-    } on StackEditException catch (error) {
+    } on ProvisionException catch (error) {
       _fail(error.message);
     } on FileSystemException catch (error) {
       _fail('Could not install phpMyAdmin: ${error.message}');
@@ -122,6 +192,14 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
         setState(() => _busy = false);
       }
     }
+  }
+
+  String _installedMessage(String directory) {
+    if (!_phpAvailable) {
+      return 'Installed to $directory. Install PHP before opening it.';
+    }
+    return 'Installed to $directory. Apache will be restarted to load the '
+        'alias.';
   }
 
   Future<void> _chooseArchive() async {
@@ -163,12 +241,31 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
             children: [
               const Text('phpMyAdmin'),
               const SizedBox(height: 10),
-              if (installed != null) ..._installedView(installed) else ..._installView(),
+              if (!_phpAvailable) ...[
+                _MessageBox(
+                  color: const Color(0xFFFFF4E5),
+                  textColor: const Color(0xFF8A6D3B),
+                  child: const Text(
+                    'No PHP version is active in this stack. Install PHP first '
+                    'from the PHP service card; Apache cannot execute '
+                    'phpMyAdmin without it.',
+                    style: TextStyle(fontSize: 12.5),
+                  ),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (installed != null)
+                ..._installedView(installed)
+              else
+                ..._installView(),
               if (_status != null) ...[
                 const SizedBox(height: 12),
                 Text(
                   _status!,
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF7A8880),
+                  ),
                 ),
               ],
               if (_busy) ...[
@@ -177,19 +274,12 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
               ],
               if (_error != null) ...[
                 const SizedBox(height: 12),
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFBEAEA),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
+                _MessageBox(
+                  color: const Color(0xFFFBEAEA),
+                  textColor: const Color(0xFFA33A3A),
                   child: Text(
                     _error!,
-                    style: const TextStyle(
-                      color: Color(0xFFA33A3A),
-                      fontSize: 12.5,
-                    ),
+                    style: const TextStyle(fontSize: 12.5),
                   ),
                 ),
               ],
@@ -203,9 +293,9 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
           child: const Text('Close'),
         ),
         FilledButton.icon(
-          onPressed: _busy ? null : () => Navigator.of(context).pop(_openUrl),
+          onPressed: _busy || installed == null ? null : _openInBrowser,
           icon: const Icon(Icons.open_in_new, size: 18),
-          label: const Text('Open in browser'),
+          label: const Text('Open phpMyAdmin'),
         ),
       ],
     );
@@ -226,15 +316,16 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
         ],
       ),
       const SizedBox(height: 6),
-      Text(
+      SelectableText(
         _openUrl,
         style: const TextStyle(fontSize: 12.5, color: Color(0xFF7A8880)),
       ),
       const SizedBox(height: 8),
       const Text(
-        'Start Apache and MySQL, then open phpMyAdmin. The generated config '
-        'connects to 127.0.0.1 as root with no password, which matches a '
-        'default local MySQL install.',
+        'The generated config connects to 127.0.0.1 as root with no password, '
+        'which matches a default local MySQL install. Opening phpMyAdmin also '
+        'checks that Apache answers, restarts it if the alias changed, and '
+        'reports the HTTP status.',
         style: TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
       ),
     ];
@@ -243,28 +334,30 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
   List<Widget> _installView() {
     return [
       Text(
-        'phpMyAdmin was not found in ${widget.layout.documentRoot}.',
+        'phpMyAdmin was not found in this stack.',
         style: const TextStyle(fontSize: 13),
       ),
-      const SizedBox(height: 12),
-      TextField(
-        controller: _url,
-        enabled: !_busy,
-        decoration: const InputDecoration(
-          labelText: 'Archive URL',
-          border: OutlineInputBorder(),
-          helperText: 'A phpMyAdmin "all languages" ZIP archive.',
+      if (_needsRepair) ...[
+        const SizedBox(height: 8),
+        _MessageBox(
+          color: const Color(0xFFFFF4E5),
+          textColor: const Color(0xFF8A6D3B),
+          child: const Text(
+            'An existing phpmyadmin folder is incomplete, so Apache cannot '
+            'serve it. Installing again replaces it.',
+            style: TextStyle(fontSize: 12),
+          ),
         ),
-      ),
+      ],
       const SizedBox(height: 12),
       Wrap(
         spacing: 8,
         runSpacing: 8,
         children: [
           FilledButton.icon(
-            onPressed: _busy ? null : _downloadAndInstall,
+            onPressed: _busy ? null : _downloadFromCatalog,
             icon: const Icon(Icons.download, size: 18),
-            label: const Text('Download and install'),
+            label: Text('Download ${_app.label}'),
           ),
           OutlinedButton.icon(
             onPressed: _busy ? null : _chooseArchive,
@@ -280,13 +373,42 @@ class _DatabaseDialogState extends State<_DatabaseDialog> {
           ),
         ],
       ),
-      const SizedBox(height: 8),
+      const SizedBox(height: 10),
       const Text(
-        'StackPilot installs phpMyAdmin into the document root as '
-        '"phpmyadmin" and writes a config for the stack MySQL port. Apache and '
-        'MySQL must be running before the page can load.',
+        'StackPilot installs phpMyAdmin into '
+        'etc\\apps\\phpmyadmin, outside the web root, and serves it at '
+        '/phpmyadmin through an Apache alias. Apache and MySQL must be '
+        'running before the page can load.',
         style: TextStyle(fontSize: 12, color: Color(0xFF7A8880)),
       ),
     ];
+  }
+}
+
+class _MessageBox extends StatelessWidget {
+  const _MessageBox({
+    required this.color,
+    required this.textColor,
+    required this.child,
+  });
+
+  final Color color;
+  final Color textColor;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: DefaultTextStyle.merge(
+        style: TextStyle(color: textColor),
+        child: child,
+      ),
+    );
   }
 }

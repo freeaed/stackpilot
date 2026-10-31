@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import 'app_info.dart';
+import 'paths.dart';
+import 'terminal.dart';
 
 /// Settings that belong to StackPilot rather than to one stack.
 ///
@@ -17,6 +19,10 @@ class AppPreferences {
     this.updateChannel = ReleaseChannel.stable,
     this.updateManifestUrl,
     this.autoCheckUpdates = true,
+    this.onboardingCompleted = false,
+    this.pendingComponents = const [],
+    this.pendingDownloadMode,
+    this.terminalShell = 'auto',
   });
 
   static const empty = AppPreferences();
@@ -41,6 +47,24 @@ class AppPreferences {
   /// Check for a new release shortly after startup.
   final bool autoCheckUpdates;
 
+  /// True once the user finished the first-run setup.
+  ///
+  /// When it is false the first-run screen always explains what StackPilot is
+  /// about. Afterwards a missing stack still opens the screen, but only as a
+  /// recovery view instead of the welcome tour.
+  final bool onboardingCompleted;
+
+  /// Components chosen in the installer, by directory name (`php`, `apache`,
+  /// `mysql`, …). The setup wizard preselects them on first launch and then
+  /// clears the list.
+  final List<String> pendingComponents;
+
+  /// Download mode chosen in the installer: `now`, `onFirstRun`, or `manual`.
+  final String? pendingDownloadMode;
+
+  /// Terminal to open: `auto`, `cmd`, `powershell`, or `windowsTerminal`.
+  final String terminalShell;
+
   AppPreferences copyWith({
     String? stacksFolder,
     String? activeStack,
@@ -48,6 +72,10 @@ class AppPreferences {
     ReleaseChannel? updateChannel,
     Object? updateManifestUrl = _unset,
     bool? autoCheckUpdates,
+    bool? onboardingCompleted,
+    List<String>? pendingComponents,
+    Object? pendingDownloadMode = _unset,
+    String? terminalShell,
   }) {
     return AppPreferences(
       stacksFolder: stacksFolder ?? this.stacksFolder,
@@ -58,6 +86,12 @@ class AppPreferences {
           ? this.updateManifestUrl
           : updateManifestUrl as String?,
       autoCheckUpdates: autoCheckUpdates ?? this.autoCheckUpdates,
+      onboardingCompleted: onboardingCompleted ?? this.onboardingCompleted,
+      pendingComponents: pendingComponents ?? this.pendingComponents,
+      pendingDownloadMode: identical(pendingDownloadMode, _unset)
+          ? this.pendingDownloadMode
+          : pendingDownloadMode as String?,
+      terminalShell: terminalShell ?? this.terminalShell,
     );
   }
 
@@ -68,6 +102,10 @@ class AppPreferences {
     'updateChannel': updateChannel.id,
     if (updateManifestUrl != null) 'updateManifestUrl': updateManifestUrl,
     'autoCheckUpdates': autoCheckUpdates,
+    'onboardingCompleted': onboardingCompleted,
+    if (pendingComponents.isNotEmpty) 'pendingComponents': pendingComponents,
+    if (pendingDownloadMode != null) 'pendingDownloadMode': pendingDownloadMode,
+    'terminalShell': terminalShell,
   };
 
   factory AppPreferences.fromJson(Map<String, Object?> json) {
@@ -86,14 +124,32 @@ class AppPreferences {
       autoCheckUpdates: json['autoCheckUpdates'] is bool
           ? json['autoCheckUpdates'] as bool
           : empty.autoCheckUpdates,
+      onboardingCompleted: json['onboardingCompleted'] is bool
+          ? json['onboardingCompleted'] as bool
+          : empty.onboardingCompleted,
+      pendingComponents: _components(json['pendingComponents']),
+      pendingDownloadMode: _url(json['pendingDownloadMode']),
+      terminalShell: TerminalShell.parse(
+        json['terminalShell'] is String ? json['terminalShell'] as String : null,
+      ).id,
     );
+  }
+
+  static List<String> _components(Object? value) {
+    if (value is! List) {
+      return const [];
+    }
+    return [
+      for (final entry in value)
+        if (entry is String && entry.trim().isNotEmpty) entry.trim(),
+    ];
   }
 
   static String? _path(Object? value) {
     if (value is! String || value.trim().isEmpty) {
       return null;
     }
-    return p.normalize(value.trim());
+    return normalizeWindowsPath(value);
   }
 
   static String? _url(Object? value) {
@@ -160,9 +216,13 @@ class AppPreferencesStore {
 
   Future<void> save(AppPreferences preferences) async {
     try {
-      await _file.parent.create(recursive: true);
-      await _file.writeAsString(
+      // Preferences are a few hundred bytes, so writing them synchronously
+      // keeps the UI state consistent and avoids a half-written file when the
+      // app is closed right after a change.
+      _file.parent.createSync(recursive: true);
+      _file.writeAsStringSync(
         '${const JsonEncoder.withIndent('  ').convert(preferences.toJson())}\n',
+        flush: true,
       );
     } on FileSystemException {
       // Persisting preferences is best effort; the app still works this run.
