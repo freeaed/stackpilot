@@ -223,7 +223,14 @@ https://freeaed.github.io/stackpilot/updates/manifest.json.sig
 ```
 
 Do not reformat or re-encode the manifest after signing; the signature covers
-the exact bytes.
+the exact bytes. Verify a signed file at any time with:
+
+```powershell
+dart run tool\verify_manifest.dart build\update-manifest.json `
+  build\update-manifest.json.sig D:\stackpilot-release-keys\update-public.key
+```
+
+Exit code 0 means the signature matches those exact bytes.
 
 ## Hosting
 
