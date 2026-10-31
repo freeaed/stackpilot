@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "generated": "2026-10-31T12:24:25Z",
+  "generated": "2026-10-31T12:29:05Z",
   "channels": {
     "preview": {
       "version": "1.0.0-preview.4",
       "notes": "Reliability pass: onboarding, stacks folder and move, working downloads, logs, terminal, phpMyAdmin, and service health checks.",
-      "published": "2026-10-31T12:24:25Z",
+      "published": "2026-10-31T12:29:05Z",
       "installer": {
-        "url": "https://github.com/freeaed/stackpilot/releases/download/v1.0.0-preview.4/StackPilot-1.0.0-preview.4-Setup.exe",
+        "url": "https://freeaed.github.io/stackpilot/downloads/StackPilot-1.0.0-preview.4-Setup.exe",
         "sha256": "4e75a8a9fd1faeca6ce590d4abb885c3db1db613861cd066f46f677a1a77b017",
         "size": 11749975
       }
