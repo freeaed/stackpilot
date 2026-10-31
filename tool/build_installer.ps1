@@ -8,7 +8,8 @@
     for signed updates.
 
     Code signing is optional for local builds and expected for published
-    releases. Pass -CertificatePath/-CertificatePassword to sign stackpilot.exe
+    releases. Pass -CertificatePath/-CertificatePassword (PFX) or
+    -CertificateThumbprint (a store/token certificate) to sign stackpilot.exe
     and the installer. Without a certificate the script warns and still builds.
 .PARAMETER SkipBuild
     Reuse the existing release build instead of running flutter build windows.
@@ -32,6 +33,13 @@
     PFX/P12 certificate used to sign the executable and the installer.
 .PARAMETER CertificatePassword
     Password for the signing certificate.
+.PARAMETER CertificateThumbprint
+    SHA-1 thumbprint of a code-signing certificate in the CurrentUser or
+    LocalMachine store. Use this for a hardware-token or EV certificate, where
+    the private key cannot be exported to a PFX. Defaults to
+    STACKPILOT_CERTIFICATE_THUMBPRINT.
+.PARAMETER TimestampUrl
+    RFC 3161 timestamp server. Defaults to http://timestamp.digicert.com.
 .PARAMETER SignTool
     Full path to signtool.exe. Defaults to PATH or the Windows SDK.
 .PARAMETER SelfSigned
@@ -54,6 +62,8 @@ param(
     [string]$PayloadDir,
     [string]$CertificatePath = $env:STACKPILOT_CERTIFICATE,
     [string]$CertificatePassword = $env:STACKPILOT_CERTIFICATE_PASSWORD,
+    [string]$CertificateThumbprint = $env:STACKPILOT_CERTIFICATE_THUMBPRINT,
+    [string]$TimestampUrl = 'http://timestamp.digicert.com',
     [string]$SignTool,
     [switch]$SelfSigned,
     [switch]$RequireSigning,
@@ -189,13 +199,36 @@ try {
     }
 
     function Invoke-SignFile([string]$File) {
-        & $script:signTool sign /fd SHA256 /f $CertificatePath `
-            /p $CertificatePassword `
-            /tr 'http://timestamp.digicert.com' /td SHA256 $File
+        if ($script:certThumbprint) {
+            & $script:signTool sign /fd SHA256 /sha1 $script:certThumbprint `
+                /tr $TimestampUrl /td SHA256 $File
+        }
+        else {
+            & $script:signTool sign /fd SHA256 /f $CertificatePath `
+                /p $CertificatePassword `
+                /tr $TimestampUrl /td SHA256 $File
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "Signing failed for $File (exit code $LASTEXITCODE)."
         }
         Write-Host "Signed $File" -ForegroundColor Green
+    }
+
+    function Resolve-SigningThumbprint([string]$Thumbprint) {
+        $clean = ($Thumbprint -replace '\s', '').ToUpperInvariant()
+        foreach ($store in @('Cert:\CurrentUser\My', 'Cert:\LocalMachine\My')) {
+            $candidate = Get-ChildItem $store -CodeSigningCert -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.Thumbprint -eq $clean -and
+                    $_.HasPrivateKey -and
+                    $_.NotAfter -gt (Get-Date)
+                } |
+                Select-Object -First 1
+            if ($candidate) {
+                return $clean
+            }
+        }
+        throw "No valid code-signing certificate with a private key was found for thumbprint $Thumbprint. Install the token/HSM certificate for this user or choose another store."
     }
 
     function New-SelfSignedCertificateFile {
@@ -220,8 +253,12 @@ try {
     }
 
     $script:signTool = $null
-    if ($SelfSigned -and $CertificatePath) {
-        throw 'Use either -SelfSigned or -CertificatePath, not both.'
+    $script:certThumbprint = $null
+    if ($SelfSigned -and ($CertificatePath -or $CertificateThumbprint)) {
+        throw 'Use either -SelfSigned, -CertificatePath, or -CertificateThumbprint, not more than one.'
+    }
+    if ($CertificatePath -and $CertificateThumbprint) {
+        throw 'Use either -CertificatePath or -CertificateThumbprint, not both.'
     }
     if ($SelfSigned -and -not $SkipSign) {
         $CertificatePath = New-SelfSignedCertificateFile
@@ -229,17 +266,23 @@ try {
         Write-Warning 'Self-signed certificate: the signature exists, but Windows SmartScreen still shows "Windows protected your PC" because the publisher is unknown. Use a CA-issued certificate for releases.'
     }
 
-    if ($RequireSigning -and (-not $CertificatePath -or $SkipSign)) {
-        throw 'This build requires a signing certificate. Pass -CertificatePath/-CertificatePassword or -SelfSigned, or drop -RequireSigning.'
+    if ($RequireSigning -and $SkipSign) {
+        throw 'This build requires signing, but -SkipSign was passed.'
+    }
+    if ($RequireSigning -and -not $CertificatePath -and -not $CertificateThumbprint) {
+        throw 'This build requires a signing certificate. Pass -CertificatePath/-CertificatePassword, -CertificateThumbprint, or -SelfSigned, or drop -RequireSigning.'
     }
 
-    if (-not $SkipSign -and $CertificatePath) {
-        if (-not (Test-Path $CertificatePath)) {
+    if (-not $SkipSign -and ($CertificatePath -or $CertificateThumbprint)) {
+        if ($CertificatePath -and -not (Test-Path $CertificatePath)) {
             throw "Signing certificate not found: $CertificatePath"
         }
         $script:signTool = Resolve-SignTool
         if (-not $script:signTool) {
             throw 'signtool.exe was not found. Install the Windows SDK or pass -SignTool.'
+        }
+        if ($CertificateThumbprint) {
+            $script:certThumbprint = Resolve-SigningThumbprint $CertificateThumbprint
         }
         Invoke-SignFile $exePath
     }

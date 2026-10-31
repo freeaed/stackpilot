@@ -83,7 +83,10 @@ for the update manifest.
 ## Code signing
 
 Published builds should sign both `stackpilot.exe` and the installer. The
-script uses `signtool.exe` with SHA-256 and a DigiCert timestamp:
+script uses `signtool.exe` with SHA-256 and an RFC 3161 timestamp
+(`-TimestampUrl`, default `http://timestamp.digicert.com`).
+
+A certificate file (PFX/P12):
 
 ```powershell
 $env:STACKPILOT_CERTIFICATE = 'C:\keys\stackpilot.pfx'
@@ -91,12 +94,52 @@ $env:STACKPILOT_CERTIFICATE_PASSWORD = '...'
 powershell -ExecutionPolicy Bypass -File tool\build_installer.ps1
 ```
 
+A certificate installed in the Windows store, which is the normal case for a
+hardware token or an EV certificate whose private key cannot be exported:
+
+```powershell
+# Find the thumbprint first.
+Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+  Select-Object Subject, Thumbprint, NotAfter
+
+powershell -ExecutionPolicy Bypass -File tool\build_installer.ps1 `
+  -CertificateThumbprint 0123456789ABCDEF0123456789ABCDEF01234567
+```
+
+The script looks in `CurrentUser\My` and `LocalMachine\My`, requires a private
+key and a certificate that has not expired, and signs with
+`/sha1 <thumbprint>`. Pass `-RequireSigning` for a stable release so an
+unsigned build fails instead of shipping.
+
 `signtool.exe` is found on `PATH` or in the Windows 10/11 SDK. Without a
 certificate the script warns and produces an unsigned installer; use that only
-for local testing.
+for local testing. Verify the result with:
+
+```powershell
+$signtool = 'C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe'
+& $signtool verify /pa /v build\installer\StackPilot-<version>-Setup.exe
+# or
+Get-AuthenticodeSignature build\installer\StackPilot-<version>-Setup.exe |
+  Format-List Status, SignerCertificate
+```
+
+Since June 2023, publicly trusted OV/EV code-signing keys must live in
+FIPS 140-2 Level 2 hardware (a USB token or HSM), so a new certificate usually
+arrives as a token/store entry, not a PFX. **Azure Trusted Signing** is the
+cloud alternative: configure its dlib and metadata, then sign after the build
+with `signtool sign /dlib ... /dmdf ...` (or add that step to the release
+workflow); the build script's PFX/thumbprint options do not cover it yet.
+
+Signing changes the installer's bytes, so a signed build needs its **own**
+manifest entry with the new size and SHA-256, and the manifest must be signed
+again. Rebuild with the certificate rather than signing the already-published
+file: that keeps the inner `stackpilot.exe` signed too and avoids mismatching
+the released checksums.
 
 For CI, store the PFX as base64 in the `WINDOWS_CERT_PFX_BASE64` secret and its
-password in `WINDOWS_CERT_PASSWORD`.
+password in `WINDOWS_CERT_PASSWORD` (the existing workflow). A token/HSM
+certificate cannot be exported to CI; use a cloud signing service such as
+Azure Trusted Signing, DigiCert KeyLocker, or SignPath there.
 
 ## Windows SmartScreen and unsigned builds
 
@@ -112,7 +155,8 @@ the file. It affects the installer and `stackpilot.exe` alike.
 What removes the warning:
 
 1. **Sign with a CA-issued code-signing certificate** and timestamp it. Pass
-   `-CertificatePath`/`-CertificatePassword` (or the CI secrets) so
+   `-CertificatePath`/`-CertificatePassword` for a PFX, or
+   `-CertificateThumbprint` for a token/EV certificate in the Windows store, so
    `stackpilot.exe` and the installer are both signed. Run
    `powershell -File tool\build_installer.ps1 -RequireSigning` for a stable
    release so an unsigned build fails instead of shipping.

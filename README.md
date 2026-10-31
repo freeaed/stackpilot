@@ -293,10 +293,13 @@ updates, `-ComponentCatalogUrl` to use a signed component catalog, and
 for the full release, signing, manifest, payload, and CI workflow.
 
 Add `-RequireSigning` to a stable release so an unsigned installer fails the
-build instead of shipping. Unsigned builds make Windows Defender SmartScreen
-show "Windows protected your PC" because it cannot verify the publisher;
-`docs/RELEASE.md` explains the certificate options and why a self-signed
-certificate does not remove that prompt.
+build instead of shipping. Sign with `-CertificatePath`/`-CertificatePassword`
+(PFX) or `-CertificateThumbprint` (a certificate in the Windows store, as with
+a USB token or EV certificate); both reach `stackpilot.exe` and the installer.
+Unsigned builds make Windows Defender SmartScreen show "Windows protected your
+PC" because it cannot verify the publisher; `docs/RELEASE.md` explains the
+certificate options and why a self-signed certificate does not remove that
+prompt.
 
 The signed updater metadata publishes to GitHub Pages with
 `tool\publish_manifest.ps1 -ManifestPath build\update-manifest.json
